@@ -219,8 +219,10 @@ async function handleRequest(path, req, res, urlObj) {
     return json(res, { success: true });
 
   } else if (path === "/api/balance" && req.method === "GET") {
+    console.log("API Key:", apiKey ? apiKey.substring(0, 20) + "..." : "MISSING");
     const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/balances");
-    return json(res, data.data);
+    console.log("Circle response:", JSON.stringify(data));
+    return json(res, data.data || { error: "No data from Circle" });
 
   } else if (path === "/api/transactions" && req.method === "GET") {
     const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/transactions?pageSize=10");
