@@ -13,10 +13,20 @@ const entitySecret = process.env.ENTITY_SECRET;
 const WALLET_ID = "63550111-2a20-5951-a107-053789cbdbfd";
 const TOKEN_ID = "5797fbd6-3795-519d-84ca-ec4c5f80c3b1";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+let supabase;
+try {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    console.log("Supabase connected successfully");
+  } else {
+    console.log("Supabase env vars missing — running without auth");
+  }
+} catch (err) {
+  console.error("Supabase init error:", err.message);
+}
 
 const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAtC4XwUTcAAEj+3vHXNl+
