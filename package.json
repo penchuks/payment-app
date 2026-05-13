@@ -13,6 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.3.1",
+    "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.16.0",
     "dotenv": "^17.4.2",
     "ethers": "^6.16.0"
