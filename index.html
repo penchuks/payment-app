@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pay with USDC</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .card { background: white; border-radius: 16px; padding: 2rem; width: 100%; max-width: 420px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .top-bar { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1.5rem; }
+    .logo img { height: 32px; }
+    .logo-tag { font-size: 11px; color: #888; margin-top: 4px; }
+    .history-btn { background: none; border: none; cursor: pointer; font-size: 12px; font-weight: 600; color: #2775CA; font-family: inherit; display: flex; align-items: center; gap: 5px; padding: 4px 0; white-space: nowrap; }
+    .history-btn svg { width: 14px; height: 14px; stroke: #2775CA; fill: none; stroke-width: 2; stroke-linecap: round; flex-shrink: 0; }
+    .balance { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f5f5f5; border-radius: 8px; margin-bottom: 1.5rem; }
+    .balance-left .balance-label { font-size: 12px; color: #888; }
+    .balance-left .balance-network { font-size: 11px; color: #aaa; margin-top: 2px; }
+    .balance-amount { font-size: 13px; font-weight: 600; }
+    .label { font-size: 11px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .amount-row { display: flex; align-items: center; gap: 8px; margin-bottom: 1.5rem; }
+    .currency { font-size: 28px; font-weight: 500; color: #999; }
+    .amount-input { font-size: 36px; font-weight: 500; border: none; outline: none; width: 100%; font-family: inherit; }
+    .amount-input::placeholder { color: #ddd; }
+    hr { border: none; border-top: 1px solid #f0f0f0; margin: 1.5rem 0; }
+    .field { margin-bottom: 1.25rem; }
+    .field input, .field textarea { width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa; outline: none; resize: none; font-family: inherit; }
+    .field input:focus, .field textarea:focus { border-color: #2775CA; }
+    .send-btn { width: 100%; padding: 14px; background: #2775CA; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 1.5rem; transition: opacity 0.15s; font-family: inherit; }
+    .send-btn:hover { opacity: 0.9; }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 1rem; padding: 12px; border-radius: 8px; font-size: 13px; display: none; }
+    .status.success { background: #e6f4ea; color: #1a7f37; display: block; }
+    .status.error { background: #fde8e8; color: #c0392b; display: block; }
+    .status.loading { background: #f5f5f5; color: #888; display: block; }
+    .tx-id { font-family: monospace; font-size: 11px; margin-top: 4px; word-break: break-all; opacity: 0.8; }
+    .tx-section { margin-top: 1.5rem; border-top: 1px solid #f0f0f0; padding-top: 1.5rem; display: none; }
+    .tx-section.open { display: block; }
+    .tx-section h3 { font-size: 13px; font-weight: 600; color: #2775CA; margin-bottom: 1rem; }
+    .tx-item { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
+    .tx-item:last-child { border-bottom: none; }
+    .tx-row { display: flex; justify-content: space-between; align-items: center; }
+    .tx-type { font-size: 13px; font-weight: 600; color: #333; }
+    .tx-amount { font-size: 13px; font-weight: 600; color: #2775CA; }
+    .tx-address { font-size: 11px; color: #aaa; font-family: monospace; margin-top: 3px; }
+    .tx-date { font-size: 11px; color: #bbb; margin-top: 3px; }
+    .tx-state { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 20px; margin-top: 4px; font-weight: 600; text-transform: uppercase; }
+    .tx-state.complete { background: #e6f4ea; color: #1a7f37; }
+    .tx-state.initiated { background: #fff3cd; color: #856404; }
+    .tx-state.failed { background: #fde8e8; color: #c0392b; }
+    .tx-empty { text-align: center; color: #bbb; font-size: 13px; padding: 1rem 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="top-bar">
+      <div class="logo">
+        <img src="/circle-logo.png" alt="Circle" />
+        <div class="logo-tag">Powered by Arc</div>
+      </div>
+      <button class="history-btn" onclick="toggleHistory()">
+        <svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-4"></path></svg>
+        Transaction History
+      </button>
+    </div>
+
+    <div class="balance">
+      <div class="balance-left">
+        <div class="balance-label">Wallet balance</div>
+        <div class="balance-network">Ethereum Sepolia Testnet</div>
+      </div>
+      <span class="balance-amount" id="balance-display">Loading...</span>
+    </div>
+
+    <div class="label">Amount</div>
+    <div class="amount-row">
+      <span class="currency">$</span>
+      <input class="amount-input" type="number" id="amount" placeholder="0.00" min="0.01" step="0.01" />
+    </div>
+
+    <hr />
+
+    <div class="field">
+      <div class="label">Recipient address</div>
+      <input type="text" id="recipient" placeholder="0x..." />
+    </div>
+
+    <div class="field">
+      <div class="label">Note (optional)</div>
+      <textarea id="note" rows="2" placeholder="What's this payment for?"></textarea>
+    </div>
+
+    <button class="send-btn" id="send-btn" onclick="sendPayment()">Send USDC</button>
+    <div class="status" id="status"></div>
+
+    <div class="tx-section" id="tx-section">
+      <h3>Transaction History</h3>
+      <div id="tx-list"><div class="tx-empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <script>
+    async function loadBalance() {
+      try {
+        const res = await fetch('/api/balance');
+        const data = await res.json();
+        const usdc = data.tokenBalances?.find(t => t.token.symbol === 'USDC');
+        document.getElementById('balance-display').textContent = usdc ? `${usdc.amount} USDC` : '0 USDC';
+      } catch {
+        document.getElementById('balance-display').textContent = 'Unable to load';
+      }
+    }
+
+    async function toggleHistory() {
+      const section = document.getElementById('tx-section');
+      section.classList.toggle('open');
+      if (!section.classList.contains('open')) return;
+      const list = document.getElementById('tx-list');
+      list.innerHTML = '<div class="tx-empty">Loading...</div>';
+      try {
+        const res = await fetch('/api/transactions');
+        const data = await res.json();
+        const txs = data.transactions || [];
+        if (txs.length === 0) { list.innerHTML = '<div class="tx-empty">No transactions yet</div>'; return; }
+        list.innerHTML = txs.map(tx => {
+          const stateClass = tx.state === 'COMPLETE' ? 'complete' : tx.state === 'FAILED' ? 'failed' : 'initiated';
+          const addr = tx.destinationAddress ? tx.destinationAddress.slice(0,6) + '...' + tx.destinationAddress.slice(-4) : '—';
+          const date = new Date(tx.createDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+          const amount = tx.amounts?.[0] || '—';
+          return `<div class="tx-item">
+            <div class="tx-row">
+              <span class="tx-type">Sent USDC</span>
+              <span class="tx-amount">${amount} USDC</span>
+            </div>
+            <div class="tx-address">To: ${addr}</div>
+            <div class="tx-date">${date}</div>
+            <span class="tx-state ${stateClass}">${tx.state}</span>
+          </div>`;
+        }).join('');
+      } catch {
+        list.innerHTML = '<div class="tx-empty">Failed to load transactions</div>';
+      }
+    }
+
+    async function sendPayment() {
+      const amount = document.getElementById('amount').value;
+      const recipient = document.getElementById('recipient').value.trim();
+      const btn = document.getElementById('send-btn');
+      if (!amount || parseFloat(amount) <= 0) { showStatus('error', 'Please enter a valid amount'); return; }
+      if (!recipient || !recipient.startsWith('0x')) { showStatus('error', 'Please enter a valid wallet address'); return; }
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      showStatus('loading', 'Processing your payment...');
+      try {
+        const res = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount, recipient })
+        });
+        const data = await res.json();
+        if (data.id) {
+          showStatus('success', `Payment sent! <div class="tx-id">TX: ${data.id}</div>`);
+          document.getElementById('amount').value = '';
+          loadBalance();
+        } else {
+          showStatus('error', data.message || 'Payment failed.');
+        }
+      } catch {
+        showStatus('error', 'Network error. Please try again.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send USDC';
+      }
+    }
+
+    function showStatus(type, msg) {
+      const el = document.getElementById('status');
+      el.className = `status ${type}`;
+      el.innerHTML = msg;
+    }
+
+    loadBalance();
+  </script>
+</body>
+</html>
