@@ -115,6 +115,7 @@ function json(res, data, status = 200) {
 // ── Server ────────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
+  console.log(`${req.method} ${req.url}`);
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -268,8 +269,8 @@ const server = http.createServer(async (req, res) => {
     }
 
   } catch (err) {
-    console.error("Server error:", err);
-    json(res, { error: "Internal server error" }, 500);
+    console.error("Server error:", err.message, err.stack);
+    json(res, { error: err.message }, 500);
   }
 });
 
