@@ -2,7 +2,9 @@ const https = require("https");
 const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");
-require("dotenv").config();
+if (process.env.NODE_ENV !== 'production') {
+  require("dotenv").config();
+}
 
 const { createClient } = require("@supabase/supabase-js");
 
