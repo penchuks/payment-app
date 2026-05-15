@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Invest — Trada</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#0a0c0b; --surface:#111413; --card:#161918; --border:#1f2421; --text:#f0ede8; --muted:#5a6360; --accent:#d4f57a; --accent2:#4ade80; --red:#f87171; --gold:#f5c842; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Instrument Sans',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2rem 1rem; }
+    .progress-wrap { width:100%; max-width:480px; margin-bottom:2rem; }
+    .progress-steps { display:flex; align-items:center; }
+    .progress-step { display:flex; align-items:center; flex:1; }
+    .step-dot { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--border); background:var(--surface); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; color:var(--muted); flex-shrink:0; transition:all 0.3s; }
+    .step-dot.active { border-color:var(--accent); background:rgba(212,245,122,0.1); color:var(--accent); }
+    .step-dot.done { border-color:var(--accent2); background:rgba(74,222,128,0.1); color:var(--accent2); font-size:14px; }
+    .step-line { flex:1; height:1px; background:var(--border); transition:background 0.3s; }
+    .step-line.done { background:var(--accent2); }
+    .step-labels { display:flex; justify-content:space-between; margin-top:8px; }
+    .step-label { font-size:10px; color:var(--muted); text-align:center; flex:1; }
+    .step-label.active { color:var(--accent); }
+    .step-label.done { color:var(--accent2); }
+    .invest-card { background:var(--card); border:1px solid var(--border); border-radius:20px; padding:2rem; width:100%; max-width:480px; }
+    .back-btn { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); cursor:pointer; background:none; border:none; font-family:inherit; margin-bottom:1.75rem; transition:color 0.2s; }
+    .back-btn:hover { color:var(--text); }
+    .back-btn svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:2; }
+    .company-header { display:flex; align-items:center; gap:14px; margin-bottom:1.75rem; padding-bottom:1.75rem; border-bottom:1px solid var(--border); }
+    .company-icon { width:52px; height:52px; border-radius:13px; background:var(--surface); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:24px; }
+    .company-name { font-family:'Fraunces',serif; font-size:20px; font-weight:600; }
+    .company-sector { font-size:12px; color:var(--muted); margin-top:3px; }
+    .company-badge { margin-left:auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:4px 10px; border-radius:20px; background:rgba(212,245,122,0.12); color:var(--accent); }
+    .step-title { font-family:'Fraunces',serif; font-size:22px; font-weight:600; margin-bottom:6px; }
+    .step-sub { font-size:14px; color:var(--muted); line-height:1.6; margin-bottom:1.75rem; }
+
+    /* Wallet card */
+    .wallet-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.25rem; margin-bottom:1.5rem; display:flex; align-items:center; gap:12px; }
+    .wallet-dot { width:8px; height:8px; background:var(--accent2); border-radius:50%; animation:pulse 2s infinite; flex-shrink:0; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .wallet-address { font-size:13px; font-weight:600; font-family:monospace; }
+    .wallet-label { font-size:11px; color:var(--muted); margin-top:2px; }
+    .wallet-balance { margin-left:auto; text-align:right; }
+    .wallet-balance-val { font-size:14px; font-weight:600; color:var(--accent); }
+    .wallet-balance-label { font-size:11px; color:var(--muted); }
+
+    /* Login prompt */
+    .login-prompt { background:rgba(212,245,122,0.06); border:1px solid rgba(212,245,122,0.2); border-radius:12px; padding:1.5rem; text-align:center; margin-bottom:1.5rem; }
+    .login-prompt p { font-size:14px; color:var(--muted); margin-bottom:1rem; line-height:1.6; }
+    .login-prompt a { color:var(--accent); text-decoration:none; font-weight:600; }
+
+    /* Amount */
+    .amount-section { margin-bottom:1.5rem; }
+    .amount-label { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:10px; }
+    .amount-input-wrap { display:flex; align-items:center; gap:8px; background:var(--surface); border:1.5px solid var(--border); border-radius:12px; padding:14px 18px; transition:border-color 0.2s; }
+    .amount-input-wrap:focus-within { border-color:var(--accent); }
+    .amount-currency { font-size:18px; color:var(--muted); font-weight:600; }
+    .amount-input { font-size:32px; font-weight:600; background:transparent; border:none; outline:none; color:var(--text); font-family:'Fraunces',serif; width:100%; }
+    .amount-input::placeholder { color:var(--border); }
+    .amount-token { font-size:13px; color:var(--muted); font-weight:600; margin-left:auto; white-space:nowrap; }
+    .quick-amounts { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .quick-btn { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:6px 14px; font-size:13px; color:var(--muted); cursor:pointer; font-family:inherit; transition:all 0.2s; }
+    .quick-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+    /* Summary */
+    .summary-box { background:var(--surface); border-radius:12px; padding:1.25rem; margin-bottom:1.5rem; }
+    .summary-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:6px 0; }
+    .summary-row:not(:last-child) { border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:4px; }
+    .summary-label { color:var(--muted); }
+    .summary-value { font-weight:600; }
+    .summary-value.accent { color:var(--accent); }
+    .summary-value.green { color:var(--accent2); }
+
+    /* Review */
+    .review-company { display:flex; align-items:center; gap:12px; background:var(--surface); border-radius:12px; padding:1.25rem; margin-bottom:1.5rem; }
+    .review-icon { font-size:28px; }
+    .review-name { font-family:'Fraunces',serif; font-size:17px; font-weight:600; }
+    .review-sector { font-size:12px; color:var(--muted); margin-top:2px; }
+    .review-amount { margin-left:auto; text-align:right; }
+    .review-amount-val { font-family:'Fraunces',serif; font-size:20px; font-weight:600; color:var(--accent); }
+    .review-amount-label { font-size:11px; color:var(--muted); margin-top:2px; }
+    .warning-box { display:flex; gap:10px; background:rgba(251,146,60,0.08); border:1px solid rgba(251,146,60,0.2); border-radius:10px; padding:12px 14px; margin-bottom:1.5rem; font-size:13px; color:#c2956a; line-height:1.6; }
+
+    /* Buttons */
+    .btn-primary { width:100%; padding:14px; background:var(--accent); color:#0a0c0b; border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer; font-family:inherit; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; gap:8px; }
+    .btn-primary:hover { opacity:0.9; }
+    .btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
+    .btn-ghost { width:100%; padding:12px; background:transparent; color:var(--muted); border:1px solid var(--border); border-radius:10px; font-size:14px; cursor:pointer; font-family:inherit; margin-top:10px; }
+    .btn-ghost:hover { border-color:var(--muted); color:var(--text); }
+
+    /* Success */
+    .success-wrap { text-align:center; padding:1rem 0; }
+    .success-ring { width:72px; height:72px; border-radius:50%; background:rgba(74,222,128,0.1); border:2px solid var(--accent2); display:flex; align-items:center; justify-content:center; margin:0 auto 1.5rem; font-size:30px; animation:popIn 0.4s ease; }
+    @keyframes popIn { from{transform:scale(0.5);opacity:0} to{transform:scale(1);opacity:1} }
+    .success-title { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin-bottom:0.5rem; }
+    .success-sub { font-size:14px; color:var(--muted); line-height:1.7; margin-bottom:2rem; }
+    .tx-box { background:var(--surface); border-radius:10px; padding:12px 16px; margin-bottom:1.5rem; }
+    .tx-box-label { font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:6px; }
+    .tx-box-value { font-size:12px; font-family:monospace; color:var(--accent); word-break:break-all; line-height:1.6; }
+    .step-page { display:none; }
+    .step-page.active { display:block; }
+    .spinner { width:18px; height:18px; border:2px solid rgba(10,12,11,0.3); border-top-color:#0a0c0b; border-radius:50%; animation:spin 0.7s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+  </style>
+</head>
+<body>
+
+  <div class="progress-wrap">
+    <div class="progress-steps">
+      <div class="progress-step"><div class="step-dot active" id="dot-1">1</div><div class="step-line" id="line-1"></div></div>
+      <div class="progress-step"><div class="step-dot" id="dot-2">2</div><div class="step-line" id="line-2"></div></div>
+      <div class="progress-step"><div class="step-dot" id="dot-3">3</div><div class="step-line" id="line-3"></div></div>
+      <div class="progress-step"><div class="step-dot" id="dot-4">4</div></div>
+    </div>
+    <div class="step-labels">
+      <span class="step-label active" id="label-1">Wallet</span>
+      <span class="step-label" id="label-2">Amount</span>
+      <span class="step-label" id="label-3">Review</span>
+      <span class="step-label" id="label-4">Done</span>
+    </div>
+  </div>
+
+  <div class="invest-card">
+
+    <div class="company-header" id="company-header">
+      <div class="company-icon" id="co-icon">⭕</div>
+      <div><div class="company-name" id="co-name">Circle Internet</div><div class="company-sector" id="co-sector">Fintech · Stablecoin · NYSE</div></div>
+      <div class="company-badge" id="co-badge">Live Now</div>
+    </div>
+
+    <!-- STEP 1: Wallet -->
+    <div class="step-page active" id="step-1">
+      <div class="step-title">Your Trada Wallet</div>
+      <div class="step-sub" id="step1-sub">Investments are made directly from your Trada wallet — no external wallet needed.</div>
+
+      <div id="wallet-info"></div>
+      <div id="step1-actions"></div>
+    </div>
+
+    <!-- STEP 2: Amount -->
+    <div class="step-page" id="step-2">
+      <button class="back-btn" onclick="goToStep(1)"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
+      <div class="step-title">How much to invest?</div>
+      <div class="step-sub">Enter the amount in USDC. Minimum $10.</div>
+      <div class="amount-section">
+        <div class="amount-label">Investment amount</div>
+        <div class="amount-input-wrap">
+          <span class="amount-currency">$</span>
+          <input class="amount-input" type="number" id="amount-input" placeholder="0" min="10" step="1" oninput="updateSummary()" />
+          <span class="amount-token">USDC</span>
+        </div>
+        <div class="quick-amounts">
+          <button class="quick-btn" onclick="setAmount(10)">$10</button>
+          <button class="quick-btn" onclick="setAmount(50)">$50</button>
+          <button class="quick-btn" onclick="setAmount(100)">$100</button>
+          <button class="quick-btn" onclick="setAmount(250)">$250</button>
+          <button class="quick-btn" onclick="setAmount(500)">$500</button>
+        </div>
+      </div>
+      <div class="summary-box" id="amount-summary" style="display:none;">
+        <div class="summary-row"><span class="summary-label">Investment amount</span><span class="summary-value" id="sum-amount">—</span></div>
+        <div class="summary-row"><span class="summary-label">Estimated shares</span><span class="summary-value accent" id="sum-shares">—</span></div>
+        <div class="summary-row"><span class="summary-label">Protocol fee (0.5%)</span><span class="summary-value" id="sum-fee">—</span></div>
+        <div class="summary-row"><span class="summary-label">Total USDC</span><span class="summary-value green" id="sum-total">—</span></div>
+      </div>
+      <button class="btn-primary" id="btn-continue-amount" onclick="goToStep(3)" disabled>Continue to Review →</button>
+    </div>
+
+    <!-- STEP 3: Review -->
+    <div class="step-page" id="step-3">
+      <button class="back-btn" onclick="goToStep(2)"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
+      <div class="step-title">Review your investment</div>
+      <div class="step-sub">Please review carefully before confirming.</div>
+      <div class="review-company">
+        <div class="review-icon" id="review-icon">⭕</div>
+        <div><div class="review-name" id="review-name">Circle Internet</div><div class="review-sector" id="review-sector">Fintech · NYSE</div></div>
+        <div class="review-amount"><div class="review-amount-val" id="review-amount-val">$0</div><div class="review-amount-label">USDC</div></div>
+      </div>
+      <div class="summary-box">
+        <div class="summary-row"><span class="summary-label">Investment amount</span><span class="summary-value" id="review-sum-amount">—</span></div>
+        <div class="summary-row"><span class="summary-label">Estimated shares</span><span class="summary-value accent" id="review-sum-shares">—</span></div>
+        <div class="summary-row"><span class="summary-label">Protocol fee (0.5%)</span><span class="summary-value" id="review-sum-fee">—</span></div>
+        <div class="summary-row"><span class="summary-label">From wallet</span><span class="summary-value" id="review-wallet" style="font-family:monospace;font-size:12px;">—</span></div>
+        <div class="summary-row"><span class="summary-label">Network</span><span class="summary-value">ETH Sepolia Testnet</span></div>
+        <div class="summary-row"><span class="summary-label">Total deducted</span><span class="summary-value green" id="review-sum-total">—</span></div>
+      </div>
+      <div class="warning-box">⚠️ &nbsp;This investment is on testnet. Real investments require mainnet USDC.</div>
+      <button class="btn-primary" id="btn-confirm" onclick="confirmInvestment()">Confirm Investment</button>
+      <button class="btn-ghost" onclick="goToStep(2)">Change amount</button>
+    </div>
+
+    <!-- STEP 4: Done -->
+    <div class="step-page" id="step-4">
+      <div class="success-wrap">
+        <div class="success-ring">🎉</div>
+        <div class="success-title">Investment confirmed!</div>
+        <div class="success-sub" id="success-sub">Your investment has been submitted.</div>
+        <div class="tx-box"><div class="tx-box-label">Transaction ID</div><div class="tx-box-value" id="tx-id">—</div></div>
+        <div class="summary-box" style="text-align:left;margin-bottom:1.5rem;">
+          <div class="summary-row"><span class="summary-label">Company</span><span class="summary-value" id="done-company">—</span></div>
+          <div class="summary-row"><span class="summary-label">Amount invested</span><span class="summary-value accent" id="done-amount">—</span></div>
+          <div class="summary-row"><span class="summary-label">Estimated shares</span><span class="summary-value" id="done-shares">—</span></div>
+          <div class="summary-row"><span class="summary-label">Status</span><span class="summary-value green">✓ Confirmed</span></div>
+        </div>
+        <button class="btn-primary" onclick="window.location.href='https://trada-phi.vercel.app/portfolio'">View Portfolio →</button>
+        <button class="btn-ghost" onclick="window.location.href='https://trada-phi.vercel.app/market'">Browse more listings</button>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  const API = 'https://payment-app-production-0794.up.railway.app';
+  const params = new URLSearchParams(window.location.search);
+  const company = {
+    name: params.get('name') || 'Circle Internet',
+    icon: params.get('icon') || '⭕',
+    sector: params.get('sector') || 'Fintech · Stablecoin · NYSE',
+    price: parseFloat(params.get('price') || '31.00'),
+    badge: params.get('badge') || 'Live Now'
+  };
+
+  document.getElementById('co-icon').textContent = company.icon;
+  document.getElementById('co-name').textContent = company.name;
+  document.getElementById('co-sector').textContent = company.sector;
+  document.getElementById('co-badge').textContent = company.badge;
+  document.getElementById('review-icon').textContent = company.icon;
+  document.getElementById('review-name').textContent = company.name;
+  document.getElementById('review-sector').textContent = company.sector;
+
+  const user = JSON.parse(localStorage.getItem('trada_user') || 'null');
+  let walletBalance = 0;
+
+  function goToStep(step) {
+    document.querySelectorAll('.step-page').forEach(p => p.classList.remove('active'));
+    document.getElementById('step-' + step).classList.add('active');
+    for (let i = 1; i <= 4; i++) {
+      const dot = document.getElementById('dot-' + i);
+      const label = document.getElementById('label-' + i);
+      const line = document.getElementById('line-' + i);
+      if (i < step) { dot.className = 'step-dot done'; dot.textContent = '✓'; label.className = 'step-label done'; if (line) line.className = 'step-line done'; }
+      else if (i === step) { dot.className = 'step-dot active'; dot.textContent = i; label.className = 'step-label active'; if (line) line.className = 'step-line'; }
+      else { dot.className = 'step-dot'; dot.textContent = i; label.className = 'step-label'; if (line) line.className = 'step-line'; }
+    }
+    document.getElementById('company-header').style.display = step === 4 ? 'none' : 'flex';
+    if (step === 3) updateReview();
+  }
+
+  async function initWalletStep() {
+    const walletInfo = document.getElementById('wallet-info');
+    const step1Actions = document.getElementById('step1-actions');
+
+    if (!user || !user.wallet_id) {
+      // Not logged in or no wallet
+      walletInfo.innerHTML = '';
+      step1Actions.innerHTML = `
+        <div class="login-prompt">
+          <p>You need a Trada account to invest. Your investments are managed through your personal Circle wallet — no external wallet needed.</p>
+          <a href="https://trada-phi.vercel.app/auth">Log in or Sign up →</a>
+        </div>
+        <button class="btn-ghost" onclick="window.history.back()">← Back to listing</button>
+      `;
+      return;
+    }
+
+    // User is logged in with a wallet
+    const walletAddress = user.wallet_address || '—';
+    const short = walletAddress !== '—' ? walletAddress.slice(0,6) + '...' + walletAddress.slice(-4) : '—';
+
+    walletInfo.innerHTML = `
+      <div class="wallet-card">
+        <div class="wallet-dot"></div>
+        <div>
+          <div class="wallet-address">${short}</div>
+          <div class="wallet-label">Your Trada wallet · Circle</div>
+        </div>
+        <div class="wallet-balance">
+          <div class="wallet-balance-val" id="wallet-bal">Loading...</div>
+          <div class="wallet-balance-label">USDC available</div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('review-wallet').textContent = short;
+
+    // Load balance
+    try {
+      const res = await fetch(API + '/api/balance?wallet_id=' + user.wallet_id);
+      const data = await res.json();
+      const usdc = data.tokenBalances ? data.tokenBalances.find(t => t.token.symbol === 'USDC') : null;
+      walletBalance = usdc ? parseFloat(usdc.amount) : 0;
+      document.getElementById('wallet-bal').textContent = walletBalance.toFixed(2) + ' USDC';
+    } catch(e) {
+      document.getElementById('wallet-bal').textContent = '— USDC';
+    }
+
+    step1Actions.innerHTML = `
+      <button class="btn-primary" onclick="goToStep(2)">Continue →</button>
+      <button class="btn-ghost" onclick="window.history.back()">← Back to listing</button>
+    `;
+  }
+
+  function setAmount(val) { document.getElementById('amount-input').value = val; updateSummary(); }
+
+  function updateSummary() {
+    const amount = parseFloat(document.getElementById('amount-input').value);
+    const btn = document.getElementById('btn-continue-amount');
+    if (!amount || amount < 10) { document.getElementById('amount-summary').style.display = 'none'; btn.disabled = true; return; }
+    const fee = (amount * 0.005).toFixed(2);
+    const total = (amount + parseFloat(fee)).toFixed(2);
+    const shares = (amount / company.price).toFixed(4);
+    document.getElementById('sum-amount').textContent = '$' + amount.toFixed(2) + ' USDC';
+    document.getElementById('sum-shares').textContent = shares + ' shares';
+    document.getElementById('sum-fee').textContent = '$' + fee + ' USDC';
+    document.getElementById('sum-total').textContent = '$' + total + ' USDC';
+    document.getElementById('amount-summary').style.display = 'block';
+    btn.disabled = false;
+  }
+
+  function updateReview() {
+    const amount = parseFloat(document.getElementById('amount-input').value);
+    const fee = (amount * 0.005).toFixed(2);
+    const shares = (amount / company.price).toFixed(4);
+    document.getElementById('review-amount-val').textContent = '$' + amount.toFixed(2);
+    document.getElementById('review-sum-amount').textContent = '$' + amount.toFixed(2) + ' USDC';
+    document.getElementById('review-sum-shares').textContent = shares + ' shares';
+    document.getElementById('review-sum-fee').textContent = '$' + fee + ' USDC';
+    document.getElementById('review-sum-total').textContent = '$' + (amount + parseFloat(fee)).toFixed(2) + ' USDC';
+  }
+
+  async function confirmInvestment() {
+    const btn = document.getElementById('btn-confirm');
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner"></div> Processing...';
+
+    const amount = parseFloat(document.getElementById('amount-input').value);
+    const shares = (amount / company.price).toFixed(4);
+
+    try {
+      const res = await fetch(API + '/api/invest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          wallet_id: user.wallet_id,
+          company_name: company.name,
+          company_icon: company.icon,
+          amount_usdc: amount,
+          shares: shares,
+          sector: company.sector
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.error) {
+        alert('Investment failed: ' + data.error);
+        btn.disabled = false;
+        btn.innerHTML = 'Confirm Investment';
+        return;
+      }
+
+      document.getElementById('tx-id').textContent = data.tx_id || '—';
+      document.getElementById('done-company').textContent = company.name;
+      document.getElementById('done-amount').textContent = '$' + amount.toFixed(2) + ' USDC';
+      document.getElementById('done-shares').textContent = shares + ' shares';
+      document.getElementById('success-sub').textContent = 'Your $' + amount.toFixed(2) + ' USDC investment in ' + company.name + ' has been confirmed. State: ' + (data.state || 'CONFIRMED');
+      goToStep(4);
+
+    } catch(err) {
+      alert('Network error. Please try again.');
+      btn.disabled = false;
+      btn.innerHTML = 'Confirm Investment';
+    }
+  }
+
+  // Init
+  initWalletStep();
+</script>
+</body>
+</html>

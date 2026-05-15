@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portfolio — Trada Pay</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#0a0c0b; --surface:#111413; --card:#161918; --border:#1f2421; --text:#f0ede8; --muted:#5a6360; --accent:#d4f57a; --accent2:#4ade80; --red:#f87171; --gold:#f5c842; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Instrument Sans',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+    nav { padding:1.1rem 2rem; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
+    .nav-logo { display:flex; align-items:center; gap:8px; text-decoration:none; }
+    .nav-logo-mark { width:28px; height:28px; background:var(--accent); border-radius:6px; display:flex; align-items:center; justify-content:center; }
+    .nav-logo-mark svg { width:14px; height:14px; stroke:#0a0c0b; stroke-width:2.5; fill:none; }
+    .nav-logo-text { font-family:'Fraunces',serif; font-size:18px; font-weight:600; color:var(--text); }
+    .nav-right { display:flex; align-items:center; gap:12px; }
+    .nav-user { font-size:13px; color:var(--muted); }
+    .nav-btn { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 16px; border-radius:6px; font-size:13px; cursor:pointer; font-family:inherit; text-decoration:none; display:inline-block; transition:border-color 0.2s; }
+    .nav-btn:hover { border-color:var(--muted); }
+    .nav-btn.primary { background:var(--accent); color:#0a0c0b; border-color:var(--accent); font-weight:600; }
+    .nav-btn.danger { color:var(--red); border-color:rgba(248,113,113,0.2); background:transparent; }
+    .main { max-width:900px; margin:0 auto; padding:3rem 2rem; }
+    .page-eyebrow { font-size:11px; text-transform:uppercase; letter-spacing:0.1em; color:var(--accent); font-weight:600; margin-bottom:0.5rem; display:flex; align-items:center; gap:8px; }
+    .page-eyebrow::before { content:''; display:block; width:16px; height:1.5px; background:var(--accent); }
+    .page-title { font-family:'Fraunces',serif; font-size:36px; font-weight:600; letter-spacing:-0.02em; margin-bottom:0.5rem; }
+    .page-sub { font-size:14px; color:var(--muted); margin-bottom:2.5rem; }
+    .stats-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:2.5rem; }
+    .stat-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem; }
+    .stat-label { font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:8px; }
+    .stat-value { font-family:'Fraunces',serif; font-size:26px; font-weight:600; letter-spacing:-0.02em; }
+    .stat-value.accent { color:var(--accent); }
+    .stat-value.green { color:var(--accent2); }
+    .stat-value.gold { color:var(--gold); }
+    .stat-change { font-size:12px; color:var(--muted); margin-top:4px; }
+    .wallet-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem 1.5rem; display:flex; align-items:center; justify-content:space-between; margin-bottom:2.5rem; }
+    .wallet-left { display:flex; align-items:center; gap:12px; }
+    .wallet-dot { width:8px; height:8px; background:var(--accent2); border-radius:50%; animation:pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .wallet-label { font-size:12px; color:var(--muted); }
+    .wallet-address-text { font-size:13px; font-weight:600; font-family:monospace; }
+    .wallet-balance-val { font-family:'Fraunces',serif; font-size:20px; font-weight:600; color:var(--accent); }
+    .wallet-balance-label { font-size:11px; color:var(--muted); margin-top:2px; text-align:right; }
+    .section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; }
+    .section-title { font-size:14px; font-weight:600; }
+    .section-link { font-size:13px; color:var(--accent); text-decoration:none; cursor:pointer; background:none; border:none; font-family:inherit; }
+    .holdings { display:flex; flex-direction:column; gap:10px; margin-bottom:2.5rem; }
+    .holding-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem 1.5rem; display:flex; align-items:center; gap:16px; transition:border-color 0.2s; }
+    .holding-card:hover { border-color:rgba(212,245,122,0.3); }
+    .holding-icon { width:44px; height:44px; border-radius:11px; background:var(--surface); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; }
+    .holding-name { font-size:15px; font-weight:600; margin-bottom:3px; }
+    .holding-meta { font-size:12px; color:var(--muted); }
+    .holding-shares { font-size:12px; color:var(--muted); margin-top:2px; }
+    .holding-right { text-align:right; margin-left:auto; }
+    .holding-value { font-size:16px; font-weight:600; margin-bottom:3px; }
+    .holding-invested { font-size:12px; color:var(--muted); }
+    .holding-status { display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:700; text-transform:uppercase; padding:3px 8px; border-radius:4px; margin-top:4px; }
+    .status-confirmed { background:rgba(74,222,128,0.1); color:var(--accent2); }
+    .empty-state { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:4rem 2rem; text-align:center; }
+    .empty-icon { font-size:40px; margin-bottom:1.25rem; }
+    .empty-title { font-family:'Fraunces',serif; font-size:22px; font-weight:600; margin-bottom:0.5rem; }
+    .empty-sub { font-size:14px; color:var(--muted); line-height:1.7; margin-bottom:2rem; }
+    .btn-primary { background:var(--accent); color:#0a0c0b; border:none; padding:12px 24px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; display:inline-block; }
+    .tx-list { display:flex; flex-direction:column; gap:8px; }
+    .tx-item { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; align-items:center; gap:14px; }
+    .tx-icon { width:36px; height:36px; border-radius:9px; background:var(--surface); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+    .tx-name { font-size:13px; font-weight:600; margin-bottom:2px; }
+    .tx-date { font-size:11px; color:var(--muted); }
+    .tx-amount { font-size:14px; font-weight:600; color:var(--accent); }
+    .fund-btn { display:inline-flex; align-items:center; gap:6px; background:rgba(212,245,122,0.1); border:1px solid rgba(212,245,122,0.2); color:var(--accent); font-size:12px; font-weight:600; padding:6px 14px; border-radius:6px; text-decoration:none; cursor:pointer; font-family:inherit; }
+    .loading { text-align:center; padding:4rem 0; color:var(--muted); font-size:14px; }
+    .loading-spinner { width:32px; height:32px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 1rem; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    @media(max-width:600px) { .stats-row{grid-template-columns:1fr 1fr;} }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="nav-logo" href="https://trada-phi.vercel.app">
+    <div class="nav-logo-mark"><svg viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></div>
+    <span class="nav-logo-text">Trada Pay</span>
+  </a>
+  <div class="nav-right">
+    <span class="nav-user" id="nav-user"></span>
+    <a href="https://payment-app-production-0794.up.railway.app/" class="nav-btn" target="_blank">Send USDC</a>
+    <a href="https://trada-phi.vercel.app/market" class="nav-btn primary">Browse IPOs →</a>
+    <button class="nav-btn danger" onclick="logout()">Log out</button>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-eyebrow">My Account</div>
+  <div class="page-title" id="page-title">Portfolio</div>
+  <div class="page-sub">Your investments and wallet activity</div>
+
+  <div id="loading-state" class="loading"><div class="loading-spinner"></div>Loading your portfolio...</div>
+
+  <div id="main-content" style="display:none;">
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">Total Invested</div><div class="stat-value accent" id="stat-total">$0</div><div class="stat-change">All time</div></div>
+      <div class="stat-card"><div class="stat-label">Investments</div><div class="stat-value" id="stat-count">0</div><div class="stat-change">Companies</div></div>
+      <div class="stat-card"><div class="stat-label">Wallet Balance</div><div class="stat-value green" id="stat-balance">—</div><div class="stat-change">Available USDC</div></div>
+      <div class="stat-card"><div class="stat-label">Network</div><div class="stat-value gold" style="font-size:14px;margin-top:6px;">ETH Sepolia</div><div class="stat-change">Testnet</div></div>
+    </div>
+
+    <div class="wallet-card">
+      <div class="wallet-left">
+        <div class="wallet-dot"></div>
+        <div>
+          <div class="wallet-label">Your Trada wallet · Circle</div>
+          <div class="wallet-address-text" id="wallet-address-display">Loading...</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div class="wallet-balance-val" id="wallet-usdc">Loading...</div>
+        <div class="wallet-balance-label">USDC available</div>
+        <a href="https://faucet.circle.com" target="_blank" class="fund-btn" style="margin-top:8px;">+ Fund wallet</a>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <div class="section-title">Your Holdings</div>
+      <a class="section-link" href="https://trada-phi.vercel.app/market">+ Add investment</a>
+    </div>
+    <div id="holdings-container"></div>
+
+    <div class="section-header" style="margin-top:2.5rem;">
+      <div class="section-title">My Watchlist</div>
+      <a class="section-link" href="https://trada-phi.vercel.app/market">Browse Market →</a>
+    </div>
+    <div id="watchlist-container"></div>
+
+    <div class="section-header" style="margin-top:2.5rem;">
+      <div class="section-title">Recent Transactions</div>
+    </div>
+    <div id="tx-container"></div>
+  </div>
+</div>
+
+<script>
+  const API = 'https://payment-app-production-0794.up.railway.app';
+  const user = JSON.parse(localStorage.getItem('trada_user') || 'null');
+
+  if (!user) window.location.href = 'https://trada-phi.vercel.app/auth';
+
+  if (user) {
+    // Set display name
+    const displayName = user.full_name && !user.full_name.startsWith('0x') ? user.full_name.split(' ')[0] : null;
+    document.getElementById('nav-user').textContent = displayName || user.email || 'My Account';
+    document.getElementById('page-title').textContent = (displayName ? displayName + "'s " : '') + 'Portfolio';
+
+    // Set wallet address
+    const walletAddr = user.wallet_address || null;
+    const walletDisplay = walletAddr ? walletAddr.slice(0,6) + '...' + walletAddr.slice(-4) : 'No wallet';
+    document.getElementById('wallet-address-display').textContent = walletAddr || 'Not assigned';
+  }
+
+  function logout() {
+    localStorage.removeItem('trada_user');
+    localStorage.removeItem('trada_session');
+    window.location.href = 'https://trada-phi.vercel.app';
+  }
+
+  async function loadPortfolio() {
+    try {
+      // Load wallet balance using user's own wallet
+      const walletId = user && user.wallet_id ? user.wallet_id : null;
+      const balanceUrl = API + '/api/balance' + (walletId ? '?wallet_id=' + walletId : '');
+      const balanceRes = await fetch(balanceUrl);
+      const balanceData = await balanceRes.json();
+      const usdc = balanceData.tokenBalances ? balanceData.tokenBalances.find(t => t.token.symbol === 'USDC') : null;
+      const usdcAmount = usdc ? usdc.amount : '0';
+      document.getElementById('stat-balance').textContent = '$' + parseFloat(usdcAmount).toFixed(2);
+      document.getElementById('wallet-usdc').textContent = parseFloat(usdcAmount).toFixed(2) + ' USDC';
+
+      // Load investments
+      let investments = [];
+      if (user && user.id) {
+        const portfolioRes = await fetch(API + '/api/portfolio?user_id=' + user.id);
+        const portfolioData = await portfolioRes.json();
+        investments = portfolioData.investments || [];
+        document.getElementById('stat-total').textContent = '$' + (portfolioData.total_invested || '0');
+        document.getElementById('stat-count').textContent = investments.length;
+      }
+
+      // Load transactions using user's wallet
+      const txWalletId = user && user.wallet_id ? user.wallet_id : null;
+      const txUrl = API + '/api/transactions' + (txWalletId ? '?wallet_id=' + txWalletId : '');
+      const txRes = await fetch(txUrl);
+      const txData = await txRes.json();
+      const transactions = txData.transactions || [];
+
+      renderHoldings(investments);
+      renderTransactions(transactions);
+      loadWatchlist();
+
+      document.getElementById('loading-state').style.display = 'none';
+      document.getElementById('main-content').style.display = 'block';
+    } catch(err) {
+      document.getElementById('loading-state').innerHTML = '<p style="color:var(--red)">Failed to load portfolio. Please refresh.</p>';
+    }
+  }
+
+  function renderHoldings(investments) {
+    const container = document.getElementById('holdings-container');
+    if (investments.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-title">No investments yet</div><div class="empty-sub">Browse upcoming IPOs and tokenized stocks on Trada and make your first investment with USDC.</div><a href="https://trada-phi.vercel.app/market" class="btn-primary">Browse IPOs on Trada →</a></div>';
+      return;
+    }
+    const grouped = {};
+    investments.forEach(function(inv) {
+      if (!grouped[inv.company_name]) {
+        grouped[inv.company_name] = { icon: inv.company_icon, total_usdc: 0, total_shares: 0, count: 0, status: inv.status };
+      }
+      grouped[inv.company_name].total_usdc += parseFloat(inv.amount_usdc);
+      grouped[inv.company_name].total_shares += parseFloat(inv.shares || 0);
+      grouped[inv.company_name].count++;
+    });
+    container.innerHTML = '<div class="holdings">' + Object.keys(grouped).map(function(name) {
+      const h = grouped[name];
+      return '<div class="holding-card"><div class="holding-icon">' + (h.icon || '📊') + '</div><div><div class="holding-name">' + name + '</div><div class="holding-meta">' + h.count + ' investment' + (h.count > 1 ? 's' : '') + '</div><div class="holding-shares">' + h.total_shares.toFixed(4) + ' shares</div></div><div class="holding-right"><div class="holding-value">$' + h.total_usdc.toFixed(2) + '</div><div class="holding-invested">USDC invested</div><span class="holding-status status-confirmed">✓ Confirmed</span></div></div>';
+    }).join('') + '</div>';
+  }
+
+  function renderTransactions(transactions) {
+    const container = document.getElementById('tx-container');
+    if (transactions.length === 0) {
+      container.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:1rem 0;">No transactions yet.</div>';
+      return;
+    }
+    container.innerHTML = '<div class="tx-list">' + transactions.slice(0, 8).map(function(tx) {
+      const date = new Date(tx.createDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const addr = tx.destinationAddress ? tx.destinationAddress.slice(0,6) + '...' + tx.destinationAddress.slice(-4) : '—';
+      const amount = tx.amounts ? tx.amounts[0] : '—';
+      return '<div class="tx-item"><div class="tx-icon">↗️</div><div><div class="tx-name">Sent USDC</div><div class="tx-date">To: ' + addr + ' · ' + date + '</div></div><div style="margin-left:auto;"><div class="tx-amount">' + amount + ' USDC</div></div></div>';
+    }).join('') + '</div>';
+  }
+
+  async function loadWatchlist() {
+    if (!user || !user.id) return;
+    try {
+      const res = await fetch(API + '/api/watchlist?user_id=' + user.id);
+      const data = await res.json();
+      const items = data.watchlist || [];
+      const container = document.getElementById('watchlist-container');
+      if (items.length === 0) {
+        container.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:1rem 0;">No companies on your watchlist yet. <a href="https://trada-phi.vercel.app/market" style="color:var(--accent);">Browse Market →</a></div>';
+        return;
+      }
+      container.innerHTML = '<div class="holdings">' + items.map(function(item) {
+        return '<div class="holding-card"><div class="holding-icon">' + (item.company_icon || '📊') + '</div><div><div class="holding-name">' + item.company_name + '</div><div class="holding-meta">' + (item.company_sector || '') + '</div></div><div class="holding-right"><a href="https://trada-phi.vercel.app/market" style="font-size:13px;color:var(--accent);text-decoration:none;font-weight:600;">View →</a></div></div>';
+      }).join('') + '</div>';
+    } catch(err) { console.error('Failed to load watchlist:', err); }
+  }
+
+  loadPortfolio();
+</script>
+</body>
+</html>

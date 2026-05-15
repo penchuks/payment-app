@@ -181,6 +181,17 @@ async function handleRequest(path, req, res, urlObj) {
       user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId }
     });
 
+    } else if (path === "/api/auth/google" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: body.redirect_url || 'https://trada-phi.vercel.app/portfolio'
+      }
+    });
+    if (result.error) return json(res, { error: result.error.message }, 400);
+    return json(res, { url: result.data.url });
+
   } else if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
     const { email, password } = body;
