@@ -218,6 +218,22 @@ async function handleRequest(path, req, res, urlObj) {
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
+  } else if (path === "/api/ipos" && req.method === "GET") {
+    const https2 = require("https");
+    return new Promise((resolve) => {
+      https2.get(`https://www.alphavantage.co/query?function=IPO_CALENDAR&apikey=${process.env.ALPHA_VANTAGE_KEY}`, (r) => {
+        let d = "";
+        r.on("data", c => d += c);
+        r.on("end", () => {
+          const rows = d.trim().split("\n").slice(1).map(row => {
+            const [symbol, name, ipoDate, priceRangeLow, priceRangeHigh, currency, exchange] = row.split(",");
+            return { symbol, name, ipoDate, priceRangeLow, priceRangeHigh, currency, exchange };
+          });
+          resolve(json(res, { ipos: rows }));
+        });
+      }).on("error", () => resolve(json(res, { ipos: [] })));
+    });
+  
   } else if (path === "/api/balance" && req.method === "GET") {
     console.log("API Key:", apiKey ? apiKey.substring(0, 20) + "..." : "MISSING");
     const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/balances");
