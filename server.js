@@ -234,6 +234,31 @@ async function handleRequest(path, req, res, urlObj) {
       }).on("error", () => resolve(json(res, { ipos: [] })));
     });
   
+    } else if (path === "/api/watchlist" && req.method === "GET") {
+    const user_id = urlObj.searchParams.get("user_id");
+    if (!user_id) return json(res, { error: "user_id required" }, 400);
+    const result = await supabase.from("watchlist").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { watchlist: result.data });
+
+} else if (path === "/api/watchlist/add" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.from("watchlist").upsert({
+      user_id: body.user_id,
+      company_id: body.company_id,
+      company_name: body.company_name,
+      company_icon: body.company_icon,
+      company_sector: body.company_sector
+    }, { onConflict: 'user_id,company_id' });
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { success: true });
+
+} else if (path === "/api/watchlist/remove" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.from("watchlist").delete().eq("user_id", body.user_id).eq("company_id", body.company_id);
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { success: true });
+
   } else if (path === "/api/balance" && req.method === "GET") {
     console.log("API Key:", apiKey ? apiKey.substring(0, 20) + "..." : "MISSING");
     const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/balances");
