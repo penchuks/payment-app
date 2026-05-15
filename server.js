@@ -192,6 +192,57 @@ async function handleRequest(path, req, res, urlObj) {
     if (result.error) return json(res, { error: result.error.message }, 400);
     return json(res, { url: result.data.url });
 
+    } else if (path === "/api/auth/session" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.getUser(body.access_token);
+    if (result.error) return json(res, { error: result.error.message }, 401);
+    
+    const userId = result.data.user.id;
+    const email = result.data.user.email;
+    const full_name = result.data.user.user_metadata?.full_name || result.data.user.user_metadata?.name || email;
+
+    // Check if user exists in users table
+    let userRecord = await supabase.from("users").select("*").eq("id", userId).single();
+    
+    if (!userRecord.data) {
+      // New Google user - create Circle wallet
+      let walletAddress = null;
+      let walletId = null;
+      try {
+        const walletResult = await circlePost("/v1/w3s/developer/wallets", {
+          idempotencyKey: crypto.randomUUID(),
+          blockchains: ["ETH-SEPOLIA"],
+          count: 1,
+          walletSetId: WALLET_SET_ID,
+          entitySecretCiphertext: generateCiphertext()
+        });
+        walletAddress = walletResult.data?.wallets?.[0]?.address || null;
+        walletId = walletResult.data?.wallets?.[0]?.id || null;
+      } catch(err) {
+        console.error("Wallet creation failed:", err.message);
+      }
+
+      await supabase.from("users").insert({
+        id: userId, email, full_name,
+        wallet_address: walletAddress,
+        wallet_id: walletId
+      });
+
+      return json(res, {
+        user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId }
+      });
+    }
+
+    return json(res, {
+      user: {
+        id: userId,
+        email,
+        full_name: userRecord.data.full_name || full_name,
+        wallet_address: userRecord.data.wallet_address,
+        wallet_id: userRecord.data.wallet_id
+      }
+    });
+
   } else if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
     const { email, password } = body;
