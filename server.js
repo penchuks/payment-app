@@ -10,7 +10,8 @@ if (process.env.NODE_ENV !== "production") {
 
 const apiKey = process.env.CIRCLE_API_KEY;
 const entitySecret = process.env.ENTITY_SECRET;
-const WALLET_ID = "63550111-2a20-5951-a107-053789cbdbfd";
+const WALLET_SET_ID = "b57b1e16-157d-591a-a2e0-afe23e2d3f43";
+const DEFAULT_WALLET_ID = "63550111-2a20-5951-a107-053789cbdbfd";
 const TOKEN_ID = "5797fbd6-3795-519d-84ca-ec4c5f80c3b1";
 
 const supabase = createClient(
@@ -49,8 +50,8 @@ function circleGet(path) {
     };
     https.get(options, (res) => {
       let data = "";
-      res.on("data", function(c) { data += c; });
-      res.on("end", function() { resolve(JSON.parse(data)); });
+      res.on("data", c => data += c);
+      res.on("end", () => resolve(JSON.parse(data)));
     }).on("error", reject);
   });
 }
@@ -70,8 +71,8 @@ function circlePost(path, body) {
     };
     const req = https.request(options, (res) => {
       let response = "";
-      res.on("data", function(c) { response += c; });
-      res.on("end", function() { resolve(JSON.parse(response)); });
+      res.on("data", c => response += c);
+      res.on("end", () => resolve(JSON.parse(response)));
     });
     req.on("error", reject);
     req.write(data);
@@ -82,8 +83,8 @@ function circlePost(path, body) {
 function readBody(req) {
   return new Promise((resolve) => {
     let body = "";
-    req.on("data", function(c) { body += c; });
-    req.on("end", function() { resolve(JSON.parse(body)); });
+    req.on("data", c => body += c);
+    req.on("end", () => resolve(JSON.parse(body)));
   });
 }
 
@@ -127,52 +128,70 @@ const server = http.createServer(function(req, res) {
 });
 
 async function handleRequest(path, req, res, urlObj) {
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+
   if (path === "/api/signup" && req.method === "POST") {
     const body = await readBody(req);
-    const email = body.email;
-    const password = body.password;
-    const full_name = body.full_name;
+    const { email, password, full_name } = body;
 
     if (!email || !password || !full_name) {
       return json(res, { error: "Email, password and full name are required" }, 400);
     }
 
     const result = await supabase.auth.admin.createUser({
-      email: email,
-      password: password,
-      user_metadata: { full_name: full_name },
+      email, password,
+      user_metadata: { full_name },
       email_confirm: true
     });
 
-    if (result.error) {
-      return json(res, { error: result.error.message }, 400);
+    if (result.error) return json(res, { error: result.error.message }, 400);
+
+    const userId = result.data.user.id;
+
+    // Create Circle wallet for user
+    let walletAddress = null;
+    let walletId = null;
+    try {
+      const walletResult = await circlePost("/v1/w3s/developer/wallets", {
+        idempotencyKey: crypto.randomUUID(),
+        blockchains: ["ETH-SEPOLIA"],
+        count: 1,
+        walletSetId: WALLET_SET_ID,
+        entitySecretCiphertext: generateCiphertext()
+      });
+      walletAddress = walletResult.data?.wallets?.[0]?.address || null;
+      walletId = walletResult.data?.wallets?.[0]?.id || null;
+      console.log("Created wallet for user:", walletAddress);
+    } catch(err) {
+      console.error("Wallet creation failed:", err.message);
     }
 
+    // Save user to DB
     await supabase.from("users").insert({
-      id: result.data.user.id,
-      email: email,
-      full_name: full_name
+      id: userId,
+      email,
+      full_name,
+      wallet_address: walletAddress,
+      wallet_id: walletId
     });
 
-    return json(res, { success: true, user: { id: result.data.user.id, email: email } });
+    return json(res, {
+      success: true,
+      user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId }
+    });
 
   } else if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
-    const email = body.email;
-    const password = body.password;
+    const { email, password } = body;
 
-    if (!email || !password) {
-      return json(res, { error: "Email and password are required" }, 400);
-    }
+    if (!email || !password) return json(res, { error: "Email and password required" }, 400);
 
-    const result = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password
-    });
+    const result = await supabase.auth.signInWithPassword({ email, password });
+    if (result.error) return json(res, { error: result.error.message }, 401);
 
-    if (result.error) {
-      return json(res, { error: result.error.message }, 401);
-    }
+    // Get user wallet info from DB
+    const userRecord = await supabase.from("users").select("wallet_address, wallet_id, full_name").eq("id", result.data.user.id).single();
 
     return json(res, {
       success: true,
@@ -180,31 +199,85 @@ async function handleRequest(path, req, res, urlObj) {
       user: {
         id: result.data.user.id,
         email: result.data.user.email,
-        full_name: result.data.user.user_metadata ? result.data.user.user_metadata.full_name : ""
+        full_name: userRecord.data?.full_name || result.data.user.user_metadata?.full_name,
+        wallet_address: userRecord.data?.wallet_address,
+        wallet_id: userRecord.data?.wallet_id
       }
     });
 
-  } else if (path === "/api/portfolio" && req.method === "GET") {
-    const user_id = urlObj.searchParams.get("user_id");
-    if (!user_id) return json(res, { error: "user_id required" }, 400);
+  // ── Wallet ────────────────────────────────────────────────────────────────
 
-    const result = await supabase
-      .from("investments")
-      .select("*")
-      .eq("user_id", user_id)
-      .order("created_at", { ascending: false });
+  } else if (path === "/api/balance" && req.method === "GET") {
+    const wallet_id = urlObj.searchParams.get("wallet_id") || DEFAULT_WALLET_ID;
+    const data = await circleGet("/v1/w3s/wallets/" + wallet_id + "/balances");
+    return json(res, data.data);
 
-    if (result.error) return json(res, { error: result.error.message }, 500);
+  } else if (path === "/api/transactions" && req.method === "GET") {
+    const wallet_id = urlObj.searchParams.get("wallet_id") || DEFAULT_WALLET_ID;
+    const data = await circleGet("/v1/w3s/wallets/" + wallet_id + "/transactions?pageSize=10");
+    return json(res, data.data || {});
 
-    const total = result.data.reduce(function(sum, inv) {
-      return sum + parseFloat(inv.amount_usdc);
-    }, 0);
+  } else if (path === "/api/send" && req.method === "POST") {
+    const body = await readBody(req);
+    const wallet_id = body.wallet_id || DEFAULT_WALLET_ID;
 
-    return json(res, { investments: result.data, total_invested: total.toFixed(2) });
+    const result = await circlePost("/v1/w3s/developer/transactions/transfer", {
+      idempotencyKey: crypto.randomUUID(),
+      walletId: wallet_id,
+      entitySecretCiphertext: generateCiphertext(),
+      amounts: [body.amount],
+      destinationAddress: body.recipient,
+      tokenId: TOKEN_ID,
+      feeLevel: "MEDIUM"
+    });
+    return json(res, result.data || result);
+
+  // ── Invest ────────────────────────────────────────────────────────────────
+
+  } else if (path === "/api/invest" && req.method === "POST") {
+    const body = await readBody(req);
+    const { user_id, wallet_id, company_name, company_icon, amount_usdc, shares, sector } = body;
+
+    if (!user_id || !amount_usdc) return json(res, { error: "Missing required fields" }, 400);
+
+    const sourceWalletId = wallet_id || DEFAULT_WALLET_ID;
+
+    // Transfer USDC via Circle API to master wallet
+    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
+      idempotencyKey: crypto.randomUUID(),
+      walletId: sourceWalletId,
+      entitySecretCiphertext: generateCiphertext(),
+      amounts: [amount_usdc.toString()],
+      destinationAddress: "0xc06ff0029c313762060b1d461b3ea9aec1f87d4f",
+      tokenId: TOKEN_ID,
+      feeLevel: "MEDIUM"
+    });
+
+    if (transfer.code && transfer.code !== 200) {
+      return json(res, { error: transfer.message || "Transfer failed" }, 400);
+    }
+
+    const txId = transfer.data?.id || crypto.randomUUID();
+
+    // Save investment to DB
+    await supabase.from("investments").insert({
+      user_id,
+      company_name,
+      company_icon,
+      amount_usdc: parseFloat(amount_usdc),
+      shares: parseFloat(shares),
+      tx_id: txId,
+      status: "confirmed"
+    });
+
+    return json(res, {
+      success: true,
+      tx_id: txId,
+      state: transfer.data?.state || "INITIATED"
+    });
 
   } else if (path === "/api/invest/save" && req.method === "POST") {
     const body = await readBody(req);
-
     const result = await supabase.from("investments").insert({
       user_id: body.user_id,
       company_name: body.company_name,
@@ -214,13 +287,51 @@ async function handleRequest(path, req, res, urlObj) {
       tx_id: body.tx_id,
       status: "confirmed"
     });
-
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
- } else if (path === "/api/ipos" && req.method === "GET") {
+  // ── Portfolio ─────────────────────────────────────────────────────────────
+
+  } else if (path === "/api/portfolio" && req.method === "GET") {
+    const user_id = urlObj.searchParams.get("user_id");
+    if (!user_id) return json(res, { error: "user_id required" }, 400);
+    const result = await supabase.from("investments").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    const total = result.data.reduce((sum, inv) => sum + parseFloat(inv.amount_usdc), 0);
+    return json(res, { investments: result.data, total_invested: total.toFixed(2) });
+
+  // ── Watchlist ─────────────────────────────────────────────────────────────
+
+  } else if (path === "/api/watchlist" && req.method === "GET") {
+    const user_id = urlObj.searchParams.get("user_id");
+    if (!user_id) return json(res, { error: "user_id required" }, 400);
+    const result = await supabase.from("watchlist").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { watchlist: result.data });
+
+  } else if (path === "/api/watchlist/add" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.from("watchlist").upsert({
+      user_id: body.user_id,
+      company_id: body.company_id,
+      company_name: body.company_name,
+      company_icon: body.company_icon,
+      company_sector: body.company_sector
+    }, { onConflict: "user_id,company_id" });
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { success: true });
+
+  } else if (path === "/api/watchlist/remove" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.from("watchlist").delete().eq("user_id", body.user_id).eq("company_id", body.company_id);
+    if (result.error) return json(res, { error: result.error.message }, 500);
+    return json(res, { success: true });
+
+  // ── IPOs ──────────────────────────────────────────────────────────────────
+
+  } else if (path === "/api/ipos" && req.method === "GET") {
     return new Promise((resolve) => {
-      https.get(`https://www.alphavantage.co/query?function=IPO_CALENDAR&apikey=${process.env.ALPHA_VANTAGE_KEY}`, (r) => {
+      https.get("https://www.alphavantage.co/query?function=IPO_CALENDAR&apikey=" + process.env.ALPHA_VANTAGE_KEY, (r) => {
         let d = "";
         r.on("data", c => d += c);
         r.on("end", () => {
@@ -229,78 +340,24 @@ async function handleRequest(path, req, res, urlObj) {
           const rows = lines.slice(1).filter(line => line.trim()).map(line => {
             const values = line.split(",");
             const obj = {};
-            headers.forEach((h, i) => {
-              obj[h.trim()] = values[i] ? values[i].trim() : '';
-            });
+            headers.forEach((h, i) => { obj[h.trim()] = values[i] ? values[i].trim() : ""; });
             return obj;
           });
           resolve(json(res, { ipos: rows }));
         });
       }).on("error", () => resolve(json(res, { ipos: [] })));
     });
-  
-    } else if (path === "/api/watchlist" && req.method === "GET") {
-    const user_id = urlObj.searchParams.get("user_id");
-    if (!user_id) return json(res, { error: "user_id required" }, 400);
-    const result = await supabase.from("watchlist").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
-    if (result.error) return json(res, { error: result.error.message }, 500);
-    return json(res, { watchlist: result.data });
 
-} else if (path === "/api/watchlist/add" && req.method === "POST") {
-    const body = await readBody(req);
-    const result = await supabase.from("watchlist").upsert({
-      user_id: body.user_id,
-      company_id: body.company_id,
-      company_name: body.company_name,
-      company_icon: body.company_icon,
-      company_sector: body.company_sector
-    }, { onConflict: 'user_id,company_id' });
-    if (result.error) return json(res, { error: result.error.message }, 500);
-    return json(res, { success: true });
-
-} else if (path === "/api/watchlist/remove" && req.method === "POST") {
-    const body = await readBody(req);
-    const result = await supabase.from("watchlist").delete().eq("user_id", body.user_id).eq("company_id", body.company_id);
-    if (result.error) return json(res, { error: result.error.message }, 500);
-    return json(res, { success: true });
-
-  } else if (path === "/api/balance" && req.method === "GET") {
-    console.log("API Key:", apiKey ? apiKey.substring(0, 20) + "..." : "MISSING");
-    const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/balances");
-    console.log("Circle response:", JSON.stringify(data));
-    return json(res, data.data || { error: "No data from Circle" });
-
-  } else if (path === "/api/transactions" && req.method === "GET") {
-    const data = await circleGet("/v1/w3s/wallets/" + WALLET_ID + "/transactions?pageSize=10");
-    return json(res, data.data || {});
-
-  } else if (path === "/api/send" && req.method === "POST") {
-    const body = await readBody(req);
-
-    const result = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(),
-      walletId: WALLET_ID,
-      entitySecretCiphertext: generateCiphertext(),
-      amounts: [body.amount],
-      destinationAddress: body.recipient,
-      tokenId: TOKEN_ID,
-      feeLevel: "MEDIUM"
-    });
-
-    return json(res, result.data || result);
+  // ── Static files ──────────────────────────────────────────────────────────
 
   } else if (path === "/auth" && req.method === "GET") {
     serveFile(res, "auth.html", "text/html");
-
   } else if (path === "/invest" && req.method === "GET") {
     serveFile(res, "invest.html", "text/html");
-
   } else if (path === "/portfolio" && req.method === "GET") {
     serveFile(res, "portfolio.html", "text/html");
-
   } else if (path === "/" && req.method === "GET") {
     serveFile(res, "index.html", "text/html");
-
   } else {
     json(res, { error: "Not found" }, 404);
   }
