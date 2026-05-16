@@ -286,7 +286,7 @@ async function handleRequest(path, req, res, urlObj) {
     });
     if (transfer.code && transfer.code !== 200) return json(res, { error: transfer.message || "Transfer failed" }, 400);
     const txId = transfer.data?.id || crypto.randomUUID();
-    await supabase.from("investments").insert({ user_id, company_name, company_icon, amount_usdc: parseFloat(amount_usdc), shares: parseFloat(shares), tx_id: txId, status: "confirmed" });
+    await supabase.from("investments").insert({ user_id, company_name, company_icon, amount_usdc: parseFloat(amount_usdc), shares: parseFloat(shares), tx_id: txId, status: "confirmed", symbol: body.symbol || null });
     return json(res, { success: true, tx_id: txId, state: transfer.data?.state || "INITIATED" });
 
   } else if (path === "/api/invest/save" && req.method === "POST") {
