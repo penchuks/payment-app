@@ -24,7 +24,6 @@ let priceCache = {};
 let historyCache = {};
 let ipoCache = { data: null, ts: 0 };
 let sentimentCache = { data: null, ts: 0 };
-
 const PRICE_TTL   = 5  * 60 * 1000;
 const HISTORY_TTL = 60 * 60 * 1000;
 const IPO_TTL     = 12 * 60 * 60 * 1000;
@@ -40,12 +39,11 @@ function rateLimit(ip, max, windowMs) {
   rateLimitMap[ip].push(now);
   return true;
 }
-// Clean up rate limit map every 5 minutes
 setInterval(() => {
   const now = Date.now();
   Object.keys(rateLimitMap).forEach(ip => {
     rateLimitMap[ip] = rateLimitMap[ip].filter(t => now - t < 60000);
-    if (rateLimitMap[ip].length === 0) delete rateLimitMap[ip];
+    if (!rateLimitMap[ip].length) delete rateLimitMap[ip];
   });
 }, 5 * 60 * 1000);
 
@@ -65,7 +63,6 @@ ngR8ws0d+l2A+TVSoGmOo9kCAwEAAQ==
 -----END PUBLIC KEY-----`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function generateCiphertext() {
   return crypto.publicEncrypt(
     { key: PUBLIC_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
@@ -75,10 +72,8 @@ function generateCiphertext() {
 
 function circleGet(path) {
   return new Promise((resolve, reject) => {
-    https.get({ hostname: "api.circle.com", path, headers: { "Authorization": "Bearer " + apiKey } }, (res) => {
-      let data = "";
-      res.on("data", c => data += c);
-      res.on("end", () => resolve(JSON.parse(data)));
+    https.get({ hostname: "api.circle.com", path, headers: { "Authorization": "Bearer " + apiKey } }, res => {
+      let d = ""; res.on("data", c => d += c); res.on("end", () => resolve(JSON.parse(d)));
     }).on("error", reject);
   });
 }
@@ -89,31 +84,23 @@ function circlePost(path, body) {
     const req = https.request({
       hostname: "api.circle.com", path, method: "POST",
       headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) }
-    }, (res) => {
-      let response = "";
-      res.on("data", c => response += c);
-      res.on("end", () => resolve(JSON.parse(response)));
-    });
-    req.on("error", reject);
-    req.write(data);
-    req.end();
+    }, res => { let r = ""; res.on("data", c => r += c); res.on("end", () => resolve(JSON.parse(r))); });
+    req.on("error", reject); req.write(data); req.end();
   });
 }
 
 function avGet(params) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const qs = new URLSearchParams({ ...params, apikey: process.env.ALPHA_VANTAGE_KEY }).toString();
-    https.get({ hostname: "www.alphavantage.co", path: "/query?" + qs }, (res) => {
-      let data = "";
-      res.on("data", c => data += c);
-      res.on("end", () => { try { resolve(JSON.parse(data)); } catch(e) { resolve({}); } });
+    https.get({ hostname: "www.alphavantage.co", path: "/query?" + qs }, res => {
+      let d = ""; res.on("data", c => d += c); res.on("end", () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({}); } });
     }).on("error", () => resolve({}));
   });
 }
 
 function fetchSinglePrice(symbol) {
-  return avGet({ function: "GLOBAL_QUOTE", symbol }).then(parsed => {
-    const q = parsed["Global Quote"] || {};
+  return avGet({ function: "GLOBAL_QUOTE", symbol }).then(p => {
+    const q = p["Global Quote"] || {};
     const price = parseFloat(q["05. price"] || 0);
     if (!price) return null;
     return { symbol, price, change: q["09. change"] || "0", change_percent: q["10. change percent"] || "0%", previous_close: parseFloat(q["08. previous close"] || 0), volume: q["06. volume"] || "0" };
@@ -121,10 +108,8 @@ function fetchSinglePrice(symbol) {
 }
 
 function readBody(req) {
-  return new Promise((resolve) => {
-    let body = "";
-    req.on("data", c => body += c);
-    req.on("end", () => { try { resolve(JSON.parse(body)); } catch(e) { resolve({}); } });
+  return new Promise(resolve => {
+    let b = ""; req.on("data", c => b += c); req.on("end", () => { try { resolve(JSON.parse(b)); } catch(e) { resolve({}); } });
   });
 }
 
@@ -139,15 +124,12 @@ function json(res, data, status) {
   res.end(JSON.stringify(data));
 }
 
-// ── Auth middleware ───────────────────────────────────────────────────────────
 async function verifyToken(req) {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-  const token = authHeader.split(" ")[1];
+  const h = req.headers["authorization"];
+  if (!h || !h.startsWith("Bearer ")) return null;
   try {
-    const result = await supabase.auth.getUser(token);
-    if (result.error) return null;
-    return result.data.user;
+    const result = await supabase.auth.getUser(h.split(" ")[1]);
+    return result.error ? null : result.data.user;
   } catch(e) { return null; }
 }
 
@@ -156,52 +138,34 @@ const server = http.createServer(function(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
   if (req.method === "OPTIONS") { res.statusCode = 200; res.end(); return; }
-
-  // Rate limiting - 100 requests per minute per IP
-  const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-  if (!rateLimit(clientIp, 100, 60000)) {
-    res.statusCode = 429;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Too many requests. Please slow down." }));
-    return;
-  }
-
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  if (!rateLimit(ip, 100, 60000)) { res.statusCode = 429; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({error:"Too many requests"})); return; }
   const urlObj = new URL(req.url, "http://" + req.headers.host);
   const path = urlObj.pathname;
-  console.log(req.method + " " + path + " [" + clientIp + "]");
-
-  handleRequest(path, req, res, urlObj).catch(err => {
-    console.error("Error:", err.message);
-    json(res, { error: err.message }, 500);
-  });
+  console.log(req.method + " " + path);
+  handleRequest(path, req, res, urlObj).catch(err => { console.error("Error:", err.message); json(res, { error: err.message }, 500); });
 });
 
 async function handleRequest(path, req, res, urlObj) {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-
   if (path === "/api/signup" && req.method === "POST") {
     const body = await readBody(req);
-    const { email, password, full_name } = body;
-    if (!email || !password || !full_name) return json(res, { error: "Email, password and full name are required" }, 400);
+    const { email, password, full_name, username } = body;
+    if (!email || !password || !full_name) return json(res, { error: "Email, password and full name required" }, 400);
     if (password.length < 8) return json(res, { error: "Password must be at least 8 characters" }, 400);
     const result = await supabase.auth.admin.createUser({ email, password, user_metadata: { full_name }, email_confirm: true });
     if (result.error) return json(res, { error: result.error.message }, 400);
     const userId = result.data.user.id;
     let walletAddress = null, walletId = null;
     try {
-      const walletResult = await circlePost("/v1/w3s/developer/wallets", {
-        idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1,
-        walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext()
-      });
-      walletAddress = walletResult.data?.wallets?.[0]?.address || null;
-      walletId = walletResult.data?.wallets?.[0]?.id || null;
-      console.log("Created wallet:", walletAddress);
-    } catch(err) { console.error("Wallet creation failed:", err.message); }
-    await supabase.from("users").insert({ id: userId, email, full_name, username: body.username || null, wallet_address: walletAddress, wallet_id: walletId });
-    return json(res, { success: true, user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId } });
+      const wr = await circlePost("/v1/w3s/developer/wallets", { idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1, walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext() });
+      walletAddress = wr.data?.wallets?.[0]?.address || null;
+      walletId = wr.data?.wallets?.[0]?.id || null;
+    } catch(e) { console.error("Wallet error:", e.message); }
+    await supabase.from("users").insert({ id: userId, email, full_name, username: username || null, wallet_address: walletAddress, wallet_id: walletId });
+    return json(res, { success: true, user: { id: userId, email, full_name, username, wallet_address: walletAddress, wallet_id: walletId } });
 
   } else if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
@@ -209,11 +173,8 @@ async function handleRequest(path, req, res, urlObj) {
     if (!email || !password) return json(res, { error: "Email and password required" }, 400);
     const result = await supabase.auth.signInWithPassword({ email, password });
     if (result.error) return json(res, { error: result.error.message }, 401);
-    const userRecord = await supabase.from("users").select("wallet_address,wallet_id,full_name").eq("id", result.data.user.id).single();
-    return json(res, {
-      success: true, session: result.data.session,
-      user: { id: result.data.user.id, email: result.data.user.email, full_name: userRecord.data?.full_name || result.data.user.user_metadata?.full_name, wallet_address: userRecord.data?.wallet_address, wallet_id: userRecord.data?.wallet_id }
-    });
+    const ur = await supabase.from("users").select("wallet_address,wallet_id,full_name,username").eq("id", result.data.user.id).single();
+    return json(res, { success: true, session: result.data.session, user: { id: result.data.user.id, email: result.data.user.email, full_name: ur.data?.full_name || result.data.user.user_metadata?.full_name, username: ur.data?.username, wallet_address: ur.data?.wallet_address, wallet_id: ur.data?.wallet_id } });
 
   } else if (path === "/api/auth/google" && req.method === "POST") {
     const body = await readBody(req);
@@ -228,24 +189,33 @@ async function handleRequest(path, req, res, urlObj) {
     const userId = result.data.user.id;
     const email = result.data.user.email;
     const full_name = result.data.user.user_metadata?.full_name || result.data.user.user_metadata?.name || email;
-    let userRecord = await supabase.from("users").select("*").eq("id", userId).single();
-    if (!userRecord.data) {
+    let ur = await supabase.from("users").select("*").eq("id", userId).single();
+    if (!ur.data) {
       let walletAddress = null, walletId = null;
       try {
-        const walletResult = await circlePost("/v1/w3s/developer/wallets", {
-          idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1,
-          walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext()
-        });
-        walletAddress = walletResult.data?.wallets?.[0]?.address || null;
-        walletId = walletResult.data?.wallets?.[0]?.id || null;
-      } catch(err) { console.error("Wallet creation failed:", err.message); }
+        const wr = await circlePost("/v1/w3s/developer/wallets", { idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1, walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext() });
+        walletAddress = wr.data?.wallets?.[0]?.address || null;
+        walletId = wr.data?.wallets?.[0]?.id || null;
+      } catch(e) {}
       await supabase.from("users").insert({ id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId });
       return json(res, { user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId } });
     }
-    return json(res, { user: { id: userId, email, full_name: userRecord.data.full_name || full_name, wallet_address: userRecord.data.wallet_address, wallet_id: userRecord.data.wallet_id } });
+    return json(res, { user: { id: userId, email, full_name: ur.data.full_name || full_name, username: ur.data.username, wallet_address: ur.data.wallet_address, wallet_id: ur.data.wallet_id } });
 
-  // ── Wallet (public read) ──────────────────────────────────────────────────
+  // ── Lookup user ───────────────────────────────────────────────────────────
+  } else if (path === "/api/lookup" && req.method === "GET") {
+    const q = urlObj.searchParams.get("q");
+    if (!q) return json(res, { error: "Query required" }, 400);
+    let result;
+    if (q.startsWith("0x")) {
+      result = await supabase.from("users").select("id,full_name,username,wallet_address").eq("wallet_address", q).single();
+    } else {
+      result = await supabase.from("users").select("id,full_name,username,wallet_address").eq("username", q.replace("@","")).single();
+    }
+    if (result.error || !result.data) return json(res, { error: "User not found" }, 404);
+    return json(res, { user: { id: result.data.id, full_name: result.data.full_name, username: result.data.username, wallet_address: result.data.wallet_address } });
 
+  // ── Wallet ────────────────────────────────────────────────────────────────
   } else if (path === "/api/balance" && req.method === "GET") {
     const wallet_id = urlObj.searchParams.get("wallet_id") || DEFAULT_WALLET_ID;
     const data = await circleGet("/v1/w3s/wallets/" + wallet_id + "/balances");
@@ -256,37 +226,26 @@ async function handleRequest(path, req, res, urlObj) {
     const data = await circleGet("/v1/w3s/wallets/" + wallet_id + "/transactions?pageSize=10");
     return json(res, data.data || {});
 
-  // ── Send (auth required) ──────────────────────────────────────────────────
-
   } else if (path === "/api/send" && req.method === "POST") {
     const authUser = await verifyToken(req);
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
-    const result = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(), walletId: body.wallet_id || DEFAULT_WALLET_ID,
-      entitySecretCiphertext: generateCiphertext(), amounts: [body.amount],
-      destinationAddress: body.recipient, tokenId: TOKEN_ID, feeLevel: "MEDIUM"
-    });
+    const result = await circlePost("/v1/w3s/developer/transactions/transfer", { idempotencyKey: crypto.randomUUID(), walletId: body.wallet_id || DEFAULT_WALLET_ID, entitySecretCiphertext: generateCiphertext(), amounts: [body.amount], destinationAddress: body.recipient, tokenId: TOKEN_ID, feeLevel: "MEDIUM" });
     return json(res, result.data || result);
 
-  // ── Invest (auth required) ────────────────────────────────────────────────
-
+  // ── Invest ────────────────────────────────────────────────────────────────
   } else if (path === "/api/invest" && req.method === "POST") {
     const authUser = await verifyToken(req);
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
-    const { user_id, wallet_id, company_name, company_icon, amount_usdc, shares } = body;
+    const { user_id, wallet_id, company_name, company_icon, amount_usdc, shares, symbol } = body;
     if (!user_id || !amount_usdc) return json(res, { error: "Missing required fields" }, 400);
     if (authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
     if (parseFloat(amount_usdc) < 1) return json(res, { error: "Minimum investment is $1" }, 400);
-    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(), walletId: wallet_id || DEFAULT_WALLET_ID,
-      entitySecretCiphertext: generateCiphertext(), amounts: [amount_usdc.toString()],
-      destinationAddress: "0xc06ff0029c313762060b1d461b3ea9aec1f87d4f", tokenId: TOKEN_ID, feeLevel: "MEDIUM"
-    });
+    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", { idempotencyKey: crypto.randomUUID(), walletId: wallet_id || DEFAULT_WALLET_ID, entitySecretCiphertext: generateCiphertext(), amounts: [amount_usdc.toString()], destinationAddress: "0xc06ff0029c313762060b1d461b3ea9aec1f87d4f", tokenId: TOKEN_ID, feeLevel: "MEDIUM" });
     if (transfer.code && transfer.code !== 200) return json(res, { error: transfer.message || "Transfer failed" }, 400);
     const txId = transfer.data?.id || crypto.randomUUID();
-    await supabase.from("investments").insert({ user_id, company_name, company_icon, amount_usdc: parseFloat(amount_usdc), shares: parseFloat(shares), tx_id: txId, status: "confirmed", symbol: body.symbol || null });
+    await supabase.from("investments").insert({ user_id, company_name, company_icon, amount_usdc: parseFloat(amount_usdc), shares: parseFloat(shares), tx_id: txId, status: "confirmed", symbol: symbol || null });
     return json(res, { success: true, tx_id: txId, state: transfer.data?.state || "INITIATED" });
 
   } else if (path === "/api/invest/save" && req.method === "POST") {
@@ -294,12 +253,11 @@ async function handleRequest(path, req, res, urlObj) {
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
     if (authUser.id !== body.user_id) return json(res, { error: "Forbidden" }, 403);
-    const result = await supabase.from("investments").insert({ user_id: body.user_id, company_name: body.company_name, company_icon: body.company_icon, amount_usdc: parseFloat(body.amount_usdc), shares: parseFloat(body.shares), tx_id: body.tx_id, status: "confirmed" });
+    const result = await supabase.from("investments").insert({ user_id: body.user_id, company_name: body.company_name, company_icon: body.company_icon, amount_usdc: parseFloat(body.amount_usdc), shares: parseFloat(body.shares), tx_id: body.tx_id, status: "confirmed", symbol: body.symbol || null });
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
-  // ── Sell (auth required) ──────────────────────────────────────────────────
-
+  // ── Sell ──────────────────────────────────────────────────────────────────
   } else if (path === "/api/sell" && req.method === "POST") {
     const authUser = await verifyToken(req);
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
@@ -318,13 +276,9 @@ async function handleRequest(path, req, res, urlObj) {
         const cached = priceCache[symbol];
         const price = (cached && (Date.now() - cached.ts) < PRICE_TTL) ? cached.price : (await fetchSinglePrice(symbol))?.price;
         if (price > 0) actualPayout = parseFloat(shares) * price;
-      } catch(e) { console.error("Price fetch error:", e.message); }
+      } catch(e) {}
     }
-    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(), walletId: DEFAULT_WALLET_ID,
-      entitySecretCiphertext: generateCiphertext(), amounts: [actualPayout.toFixed(2)],
-      destinationAddress: wallet_address, tokenId: TOKEN_ID, feeLevel: "MEDIUM"
-    });
+    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", { idempotencyKey: crypto.randomUUID(), walletId: DEFAULT_WALLET_ID, entitySecretCiphertext: generateCiphertext(), amounts: [actualPayout.toFixed(2)], destinationAddress: wallet_address, tokenId: TOKEN_ID, feeLevel: "MEDIUM" });
     if (transfer.code && transfer.code !== 200) return json(res, { error: transfer.message || "Transfer failed" }, 400);
     const txId = transfer.data?.id || crypto.randomUUID();
     if (remaining <= 0.01) {
@@ -335,8 +289,35 @@ async function handleRequest(path, req, res, urlObj) {
     }
     return json(res, { success: true, tx_id: txId, payout: actualPayout, remaining });
 
-  // ── Portfolio (auth required) ─────────────────────────────────────────────
+  // ── Gift/Send Shares ──────────────────────────────────────────────────────
+  } else if (path === "/api/gift" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
+    const body = await readBody(req);
+    const { user_id, investment_id, recipient_id, shares_to_gift, company_name, company_icon, symbol } = body;
+    if (!user_id || !recipient_id || !shares_to_gift) return json(res, { error: "Missing required fields" }, 400);
+    if (authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
+    if (recipient_id === user_id) return json(res, { error: "You cannot send shares to yourself" }, 400);
+    const invResult = await supabase.from("investments").select("*").eq("id", investment_id).eq("user_id", user_id).single();
+    if (invResult.error) return json(res, { error: "Investment not found" }, 404);
+    const totalShares = parseFloat(invResult.data.shares);
+    const giftShares = parseFloat(shares_to_gift);
+    if (giftShares <= 0 || giftShares > totalShares) return json(res, { error: "Invalid share amount" }, 400);
+    const shareRatio = giftShares / totalShares;
+    const giftUsdc = parseFloat(invResult.data.amount_usdc) * shareRatio;
+    const remainingShares = totalShares - giftShares;
+    const remainingUsdc = parseFloat(invResult.data.amount_usdc) - giftUsdc;
+    if (remainingShares <= 0.0001) {
+      await supabase.from("investments").update({ status: "gifted" }).eq("id", investment_id);
+    } else {
+      await supabase.from("investments").update({ shares: remainingShares, amount_usdc: remainingUsdc }).eq("id", investment_id);
+    }
+    await supabase.from("investments").insert({ user_id: recipient_id, company_name, company_icon, amount_usdc: giftUsdc, shares: giftShares, tx_id: "gift-" + crypto.randomUUID(), status: "confirmed", symbol: symbol || null });
+    const recipientResult = await supabase.from("users").select("full_name,username").eq("id", recipient_id).single();
+    const recipientName = recipientResult.data?.full_name || recipientResult.data?.username || "recipient";
+    return json(res, { success: true, recipient_name: recipientName, shares_gifted: giftShares, usdc_value: giftUsdc });
 
+  // ── Portfolio ─────────────────────────────────────────────────────────────
   } else if (path === "/api/portfolio" && req.method === "GET") {
     const authUser = await verifyToken(req);
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
@@ -347,8 +328,7 @@ async function handleRequest(path, req, res, urlObj) {
     const total = result.data.filter(i => i.status === "confirmed").reduce((sum, inv) => sum + parseFloat(inv.amount_usdc), 0);
     return json(res, { investments: result.data, total_invested: total.toFixed(2) });
 
-  // ── Watchlist (auth required) ─────────────────────────────────────────────
-
+  // ── Watchlist ─────────────────────────────────────────────────────────────
   } else if (path === "/api/watchlist" && req.method === "GET") {
     const authUser = await verifyToken(req);
     if (!authUser) return json(res, { error: "Unauthorized" }, 401);
@@ -376,17 +356,13 @@ async function handleRequest(path, req, res, urlObj) {
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
-  // ── Prices (public, cached) ───────────────────────────────────────────────
-
+  // ── Prices ────────────────────────────────────────────────────────────────
   } else if (path === "/api/prices" && req.method === "GET") {
     const symbols = (urlObj.searchParams.get("symbols") || "CRCL,JMIA,PYPL,COIN,HOOD,MSFT,AAPL,TSLA,NVDA,META,GOOGL,AMZN").split(",");
     const now = Date.now();
     const stale = symbols.filter(s => !priceCache[s] || (now - priceCache[s].ts) >= PRICE_TTL);
     for (const symbol of stale.slice(0, 5)) {
-      try {
-        const data = await fetchSinglePrice(symbol);
-        if (data) priceCache[symbol] = { ...data, ts: now };
-      } catch(e) { console.error("Price error " + symbol, e.message); }
+      try { const data = await fetchSinglePrice(symbol); if (data) priceCache[symbol] = { ...data, ts: now }; } catch(e) {}
       if (stale.indexOf(symbol) < stale.length - 1) await new Promise(r => setTimeout(r, 300));
     }
     const result = {};
@@ -404,65 +380,40 @@ async function handleRequest(path, req, res, urlObj) {
   } else if (path === "/api/history" && req.method === "GET") {
     const symbol = urlObj.searchParams.get("symbol") || "CRCL";
     const now = Date.now();
-    if (historyCache[symbol] && (now - historyCache[symbol].ts) < HISTORY_TTL) {
-      return json(res, { symbol, prices: historyCache[symbol].data, cached: true });
-    }
+    if (historyCache[symbol] && (now - historyCache[symbol].ts) < HISTORY_TTL) return json(res, { symbol, prices: historyCache[symbol].data, cached: true });
     const parsed = await avGet({ function: "TIME_SERIES_DAILY", symbol, outputsize: "compact" });
     const series = parsed["Time Series (Daily)"] || {};
     const dates = Object.keys(series).sort();
-    const prices = {
-      "1D": dates.slice(-2).map(d => parseFloat(series[d]["4. close"])),
-      "1M": dates.slice(-22).map(d => parseFloat(series[d]["4. close"])),
-      "6M": dates.slice(-126).map(d => parseFloat(series[d]["4. close"])),
-      "12M": dates.slice(-252).map(d => parseFloat(series[d]["4. close"])),
-      dates: { "1D": dates.slice(-2), "1M": dates.slice(-22), "6M": dates.slice(-126), "12M": dates.slice(-252) }
-    };
+    const prices = { "1D": dates.slice(-2).map(d => parseFloat(series[d]["4. close"])), "1M": dates.slice(-22).map(d => parseFloat(series[d]["4. close"])), "6M": dates.slice(-126).map(d => parseFloat(series[d]["4. close"])), "12M": dates.slice(-252).map(d => parseFloat(series[d]["4. close"])), dates: { "1D": dates.slice(-2), "1M": dates.slice(-22), "6M": dates.slice(-126), "12M": dates.slice(-252) } };
     historyCache[symbol] = { data: prices, ts: now };
     return json(res, { symbol, prices });
 
   } else if (path === "/api/sentiment" && req.method === "GET") {
     const now = Date.now();
     if (sentimentCache.data && (now - sentimentCache.ts) < SENT_TTL) return json(res, sentimentCache.data);
-    return new Promise((resolve) => {
-      https.get({ hostname: "api.alternative.me", path: "/fng/?limit=1" }, (r) => {
-        let d = "";
-        r.on("data", c => d += c);
-        r.on("end", () => {
-          try {
-            const parsed = JSON.parse(d);
-            const data = { value: parseInt(parsed.data[0].value), label: parsed.data[0].value_classification };
-            sentimentCache = { data, ts: Date.now() };
-            resolve(json(res, data));
-          } catch(e) { resolve(json(res, sentimentCache.data || { value: 65, label: "Greed" })); }
+    return new Promise(resolve => {
+      https.get({ hostname: "api.alternative.me", path: "/fng/?limit=1" }, r => {
+        let d = ""; r.on("data", c => d += c); r.on("end", () => {
+          try { const p = JSON.parse(d); const data = { value: parseInt(p.data[0].value), label: p.data[0].value_classification }; sentimentCache = { data, ts: Date.now() }; resolve(json(res, data)); }
+          catch(e) { resolve(json(res, sentimentCache.data || { value: 65, label: "Greed" })); }
         });
       }).on("error", () => resolve(json(res, sentimentCache.data || { value: 65, label: "Greed" })));
     });
 
-  // ── IPOs (public, cached) ─────────────────────────────────────────────────
-
   } else if (path === "/api/ipos" && req.method === "GET") {
     const now = Date.now();
     if (ipoCache.data && (now - ipoCache.ts) < IPO_TTL) return json(res, { ipos: ipoCache.data, cached: true });
-    return new Promise((resolve) => {
-      https.get({ hostname: "www.alphavantage.co", path: "/query?function=IPO_CALENDAR&apikey=" + process.env.ALPHA_VANTAGE_KEY }, (r) => {
-        let d = "";
-        r.on("data", c => d += c);
-        r.on("end", () => {
+    return new Promise(resolve => {
+      https.get({ hostname: "www.alphavantage.co", path: "/query?function=IPO_CALENDAR&apikey=" + process.env.ALPHA_VANTAGE_KEY }, r => {
+        let d = ""; r.on("data", c => d += c); r.on("end", () => {
           const lines = d.trim().split("\n");
           const headers = lines[0].split(",");
-          const rows = lines.slice(1).filter(l => l.trim()).map(line => {
-            const values = line.split(",");
-            const obj = {};
-            headers.forEach((h, i) => { obj[h.trim()] = values[i] ? values[i].trim() : ""; });
-            return obj;
-          });
+          const rows = lines.slice(1).filter(l => l.trim()).map(line => { const vals = line.split(","); const obj = {}; headers.forEach((h, i) => { obj[h.trim()] = vals[i] ? vals[i].trim() : ""; }); return obj; });
           ipoCache = { data: rows, ts: Date.now() };
           resolve(json(res, { ipos: rows }));
         });
       }).on("error", () => resolve(json(res, { ipos: ipoCache.data || [] })));
     });
-
-  // ── Static files ──────────────────────────────────────────────────────────
 
   } else if (path === "/auth" && req.method === "GET") { serveFile(res, "auth.html", "text/html");
   } else if (path === "/invest" && req.method === "GET") { serveFile(res, "invest.html", "text/html");
@@ -472,6 +423,4 @@ async function handleRequest(path, req, res, urlObj) {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, function() {
-  console.log("Payment server running on port " + PORT);
-});
+server.listen(PORT, () => console.log("Payment server running on port " + PORT));
