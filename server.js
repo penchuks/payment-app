@@ -303,12 +303,20 @@ async function handleRequest(path, req, res, urlObj) {
       return json(res, { error: "Missing required fields" }, 400);
     }
 
+    // Get original investment
+    const invResult = await supabase.from("investments").select("*").eq("id", investment_id).single();
+    if (invResult.error) return json(res, { error: "Investment not found" }, 404);
+
+    const originalAmount = parseFloat(invResult.data.amount_usdc);
+    const sellAmount = parseFloat(amount_usdc);
+    const remaining = originalAmount - sellAmount;
+
     // Transfer USDC from master wallet back to user wallet
     const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
       idempotencyKey: crypto.randomUUID(),
       walletId: DEFAULT_WALLET_ID,
       entitySecretCiphertext: generateCiphertext(),
-      amounts: [amount_usdc.toString()],
+      amounts: [sellAmount.toString()],
       destinationAddress: wallet_address,
       tokenId: TOKEN_ID,
       feeLevel: "MEDIUM"
@@ -319,6 +327,21 @@ async function handleRequest(path, req, res, urlObj) {
     }
 
     const txId = transfer.data?.id || crypto.randomUUID();
+
+    if (remaining <= 0.01) {
+      // Full sell — mark as sold
+      await supabase.from("investments").update({ status: "sold", tx_id: txId }).eq("id", investment_id);
+    } else {
+      // Partial sell — update remaining amount
+      const newShares = parseFloat(invResult.data.shares) * (remaining / originalAmount);
+      await supabase.from("investments").update({
+        amount_usdc: remaining,
+        shares: newShares,
+        tx_id: txId
+      }).eq("id", investment_id);
+    }
+
+    return json(res, { success: true, tx_id: txId, remaining: remaining });
 
     // Update investment status to sold
     await supabase.from("investments")
