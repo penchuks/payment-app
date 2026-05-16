@@ -295,6 +295,38 @@ async function handleRequest(path, req, res, urlObj) {
     return json(res, result.data || result);
 
   // ── Invest ────────────────────────────────────────────────────────────────
+  } else if (path === "/api/sell" && req.method === "POST") {
+    const body = await readBody(req);
+    const { user_id, investment_id, company_name, amount_usdc, wallet_id, wallet_address } = body;
+
+    if (!user_id || !amount_usdc || !wallet_address) {
+      return json(res, { error: "Missing required fields" }, 400);
+    }
+
+    // Transfer USDC from master wallet back to user wallet
+    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
+      idempotencyKey: crypto.randomUUID(),
+      walletId: DEFAULT_WALLET_ID,
+      entitySecretCiphertext: generateCiphertext(),
+      amounts: [amount_usdc.toString()],
+      destinationAddress: wallet_address,
+      tokenId: TOKEN_ID,
+      feeLevel: "MEDIUM"
+    });
+
+    if (transfer.code && transfer.code !== 200) {
+      return json(res, { error: transfer.message || "Transfer failed" }, 400);
+    }
+
+    const txId = transfer.data?.id || crypto.randomUUID();
+
+    // Update investment status to sold
+    await supabase.from("investments")
+      .update({ status: "sold", tx_id: txId })
+      .eq("id", investment_id)
+      .eq("user_id", user_id);
+
+    return json(res, { success: true, tx_id: txId });
 
   } else if (path === "/api/invest" && req.method === "POST") {
     const body = await readBody(req);
