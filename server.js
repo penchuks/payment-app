@@ -268,6 +268,29 @@ async function handleRequest(path, req, res, urlObj) {
     });
 
   // ── Wallet ────────────────────────────────────────────────────────────────
+} else if (path === "/api/price" && req.method === "GET") {
+    const symbol = urlObj.searchParams.get("symbol") || "CRCL";
+    return new Promise((resolve) => {
+      https.get("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=" + symbol + "&apikey=" + process.env.ALPHA_VANTAGE_KEY, (r) => {
+        let d = "";
+        r.on("data", c => d += c);
+        r.on("end", () => {
+          try {
+            const parsed = JSON.parse(d);
+            const quote = parsed["Global Quote"] || {};
+            resolve(json(res, {
+              symbol: symbol,
+              price: parseFloat(quote["05. price"] || 0),
+              change: quote["09. change"] || "0",
+              change_percent: quote["10. change percent"] || "0%",
+              previous_close: parseFloat(quote["08. previous close"] || 0)
+            }));
+          } catch(e) {
+            resolve(json(res, { symbol, price: 0, change: "0", change_percent: "0%" }));
+          }
+        });
+      }).on("error", () => resolve(json(res, { symbol, price: 0 })));
+    });
 
   } else if (path === "/api/balance" && req.method === "GET") {
     const wallet_id = urlObj.searchParams.get("wallet_id") || DEFAULT_WALLET_ID;
