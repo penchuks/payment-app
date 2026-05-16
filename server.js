@@ -200,7 +200,7 @@ async function handleRequest(path, req, res, urlObj) {
       walletId = walletResult.data?.wallets?.[0]?.id || null;
       console.log("Created wallet:", walletAddress);
     } catch(err) { console.error("Wallet creation failed:", err.message); }
-    await supabase.from("users").insert({ id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId });
+    await supabase.from("users").insert({ id: userId, email, full_name, username: body.username || null, wallet_address: walletAddress, wallet_id: walletId });
     return json(res, { success: true, user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId } });
 
   } else if (path === "/api/login" && req.method === "POST") {
