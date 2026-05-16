@@ -19,6 +19,36 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// ── Cache ─────────────────────────────────────────────────────────────────────
+let priceCache = {};
+let historyCache = {};
+let ipoCache = { data: null, ts: 0 };
+let sentimentCache = { data: null, ts: 0 };
+
+const PRICE_TTL   = 5  * 60 * 1000;
+const HISTORY_TTL = 60 * 60 * 1000;
+const IPO_TTL     = 12 * 60 * 60 * 1000;
+const SENT_TTL    = 10 * 60 * 1000;
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const rateLimitMap = {};
+function rateLimit(ip, max, windowMs) {
+  const now = Date.now();
+  if (!rateLimitMap[ip]) rateLimitMap[ip] = [];
+  rateLimitMap[ip] = rateLimitMap[ip].filter(t => now - t < windowMs);
+  if (rateLimitMap[ip].length >= max) return false;
+  rateLimitMap[ip].push(now);
+  return true;
+}
+// Clean up rate limit map every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(rateLimitMap).forEach(ip => {
+    rateLimitMap[ip] = rateLimitMap[ip].filter(t => now - t < 60000);
+    if (rateLimitMap[ip].length === 0) delete rateLimitMap[ip];
+  });
+}, 5 * 60 * 1000);
+
 const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAtC4XwUTcAAEj+3vHXNl+
 VCKS4F0XCfC6xlsahuqEXgAwzzQvS5ocm7Lvm5YmzM9enBaP4Po6KZbF7SDtzVB3
@@ -34,6 +64,8 @@ z+RYVllcIIgDftD/mS2MsH74q7TBAx1eu5dvhG5nBL4Q6GC8rgJ/OQDUzjQOMuRW
 ngR8ws0d+l2A+TVSoGmOo9kCAwEAAQ==
 -----END PUBLIC KEY-----`;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function generateCiphertext() {
   return crypto.publicEncrypt(
     { key: PUBLIC_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
@@ -43,12 +75,7 @@ function generateCiphertext() {
 
 function circleGet(path) {
   return new Promise((resolve, reject) => {
-    const options = {
-      hostname: "api.circle.com",
-      path: path,
-      headers: { "Authorization": "Bearer " + apiKey }
-    };
-    https.get(options, (res) => {
+    https.get({ hostname: "api.circle.com", path, headers: { "Authorization": "Bearer " + apiKey } }, (res) => {
       let data = "";
       res.on("data", c => data += c);
       res.on("end", () => resolve(JSON.parse(data)));
@@ -59,17 +86,10 @@ function circleGet(path) {
 function circlePost(path, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
-    const options = {
-      hostname: "api.circle.com",
-      path: path,
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + apiKey,
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(data)
-      }
-    };
-    const req = https.request(options, (res) => {
+    const req = https.request({
+      hostname: "api.circle.com", path, method: "POST",
+      headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) }
+    }, (res) => {
       let response = "";
       res.on("data", c => response += c);
       res.on("end", () => resolve(JSON.parse(response)));
@@ -80,23 +100,37 @@ function circlePost(path, body) {
   });
 }
 
+function avGet(params) {
+  return new Promise((resolve) => {
+    const qs = new URLSearchParams({ ...params, apikey: process.env.ALPHA_VANTAGE_KEY }).toString();
+    https.get({ hostname: "www.alphavantage.co", path: "/query?" + qs }, (res) => {
+      let data = "";
+      res.on("data", c => data += c);
+      res.on("end", () => { try { resolve(JSON.parse(data)); } catch(e) { resolve({}); } });
+    }).on("error", () => resolve({}));
+  });
+}
+
+function fetchSinglePrice(symbol) {
+  return avGet({ function: "GLOBAL_QUOTE", symbol }).then(parsed => {
+    const q = parsed["Global Quote"] || {};
+    const price = parseFloat(q["05. price"] || 0);
+    if (!price) return null;
+    return { symbol, price, change: q["09. change"] || "0", change_percent: q["10. change percent"] || "0%", previous_close: parseFloat(q["08. previous close"] || 0), volume: q["06. volume"] || "0" };
+  });
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let body = "";
     req.on("data", c => body += c);
-    req.on("end", () => resolve(JSON.parse(body)));
+    req.on("end", () => { try { resolve(JSON.parse(body)); } catch(e) { resolve({}); } });
   });
 }
 
 function serveFile(res, filename, contentType) {
-  try {
-    res.setHeader("Content-Type", contentType);
-    res.end(fs.readFileSync(filename));
-  } catch(e) {
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "File not found" }));
-  }
+  try { res.setHeader("Content-Type", contentType); res.end(fs.readFileSync(filename)); }
+  catch(e) { res.statusCode = 404; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: "Not found" })); }
 }
 
 function json(res, data, status) {
@@ -105,23 +139,40 @@ function json(res, data, status) {
   res.end(JSON.stringify(data));
 }
 
+// ── Auth middleware ───────────────────────────────────────────────────────────
+async function verifyToken(req) {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.split(" ")[1];
+  try {
+    const result = await supabase.auth.getUser(token);
+    if (result.error) return null;
+    return result.data.user;
+  } catch(e) { return null; }
+}
+
+// ── Server ────────────────────────────────────────────────────────────────────
 const server = http.createServer(function(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  if (req.method === "OPTIONS") {
-    res.statusCode = 200;
-    res.end();
+  if (req.method === "OPTIONS") { res.statusCode = 200; res.end(); return; }
+
+  // Rate limiting - 100 requests per minute per IP
+  const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  if (!rateLimit(clientIp, 100, 60000)) {
+    res.statusCode = 429;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Too many requests. Please slow down." }));
     return;
   }
 
   const urlObj = new URL(req.url, "http://" + req.headers.host);
   const path = urlObj.pathname;
+  console.log(req.method + " " + path + " [" + clientIp + "]");
 
-  console.log(req.method + " " + path);
-
-  handleRequest(path, req, res, urlObj).catch(function(err) {
+  handleRequest(path, req, res, urlObj).catch(err => {
     console.error("Error:", err.message);
     json(res, { error: err.message }, 500);
   });
@@ -134,163 +185,66 @@ async function handleRequest(path, req, res, urlObj) {
   if (path === "/api/signup" && req.method === "POST") {
     const body = await readBody(req);
     const { email, password, full_name } = body;
-
-    if (!email || !password || !full_name) {
-      return json(res, { error: "Email, password and full name are required" }, 400);
-    }
-
-    const result = await supabase.auth.admin.createUser({
-      email, password,
-      user_metadata: { full_name },
-      email_confirm: true
-    });
-
+    if (!email || !password || !full_name) return json(res, { error: "Email, password and full name are required" }, 400);
+    if (password.length < 8) return json(res, { error: "Password must be at least 8 characters" }, 400);
+    const result = await supabase.auth.admin.createUser({ email, password, user_metadata: { full_name }, email_confirm: true });
     if (result.error) return json(res, { error: result.error.message }, 400);
-
     const userId = result.data.user.id;
-
-    // Create Circle wallet for user
-    let walletAddress = null;
-    let walletId = null;
+    let walletAddress = null, walletId = null;
     try {
       const walletResult = await circlePost("/v1/w3s/developer/wallets", {
-        idempotencyKey: crypto.randomUUID(),
-        blockchains: ["ETH-SEPOLIA"],
-        count: 1,
-        walletSetId: WALLET_SET_ID,
-        entitySecretCiphertext: generateCiphertext()
+        idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1,
+        walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext()
       });
       walletAddress = walletResult.data?.wallets?.[0]?.address || null;
       walletId = walletResult.data?.wallets?.[0]?.id || null;
-      console.log("Created wallet for user:", walletAddress);
-    } catch(err) {
-      console.error("Wallet creation failed:", err.message);
-    }
-
-    // Save user to DB
-    await supabase.from("users").insert({
-      id: userId,
-      email,
-      full_name,
-      wallet_address: walletAddress,
-      wallet_id: walletId
-    });
-
-    return json(res, {
-      success: true,
-      user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId }
-    });
-
-    } else if (path === "/api/auth/google" && req.method === "POST") {
-    const body = await readBody(req);
-    const result = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: body.redirect_url || 'https://trada-phi.vercel.app/portfolio'
-      }
-    });
-    if (result.error) return json(res, { error: result.error.message }, 400);
-    return json(res, { url: result.data.url });
-
-    } else if (path === "/api/auth/session" && req.method === "POST") {
-    const body = await readBody(req);
-    const result = await supabase.auth.getUser(body.access_token);
-    if (result.error) return json(res, { error: result.error.message }, 401);
-    
-    const userId = result.data.user.id;
-    const email = result.data.user.email;
-    const full_name = result.data.user.user_metadata?.full_name || result.data.user.user_metadata?.name || email;
-
-    // Check if user exists in users table
-    let userRecord = await supabase.from("users").select("*").eq("id", userId).single();
-    
-    if (!userRecord.data) {
-      // New Google user - create Circle wallet
-      let walletAddress = null;
-      let walletId = null;
-      try {
-        const walletResult = await circlePost("/v1/w3s/developer/wallets", {
-          idempotencyKey: crypto.randomUUID(),
-          blockchains: ["ETH-SEPOLIA"],
-          count: 1,
-          walletSetId: WALLET_SET_ID,
-          entitySecretCiphertext: generateCiphertext()
-        });
-        walletAddress = walletResult.data?.wallets?.[0]?.address || null;
-        walletId = walletResult.data?.wallets?.[0]?.id || null;
-      } catch(err) {
-        console.error("Wallet creation failed:", err.message);
-      }
-
-      await supabase.from("users").insert({
-        id: userId, email, full_name,
-        wallet_address: walletAddress,
-        wallet_id: walletId
-      });
-
-      return json(res, {
-        user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId }
-      });
-    }
-
-    return json(res, {
-      user: {
-        id: userId,
-        email,
-        full_name: userRecord.data.full_name || full_name,
-        wallet_address: userRecord.data.wallet_address,
-        wallet_id: userRecord.data.wallet_id
-      }
-    });
+      console.log("Created wallet:", walletAddress);
+    } catch(err) { console.error("Wallet creation failed:", err.message); }
+    await supabase.from("users").insert({ id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId });
+    return json(res, { success: true, user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId } });
 
   } else if (path === "/api/login" && req.method === "POST") {
     const body = await readBody(req);
     const { email, password } = body;
-
     if (!email || !password) return json(res, { error: "Email and password required" }, 400);
-
     const result = await supabase.auth.signInWithPassword({ email, password });
     if (result.error) return json(res, { error: result.error.message }, 401);
-
-    // Get user wallet info from DB
-    const userRecord = await supabase.from("users").select("wallet_address, wallet_id, full_name").eq("id", result.data.user.id).single();
-
+    const userRecord = await supabase.from("users").select("wallet_address,wallet_id,full_name").eq("id", result.data.user.id).single();
     return json(res, {
-      success: true,
-      session: result.data.session,
-      user: {
-        id: result.data.user.id,
-        email: result.data.user.email,
-        full_name: userRecord.data?.full_name || result.data.user.user_metadata?.full_name,
-        wallet_address: userRecord.data?.wallet_address,
-        wallet_id: userRecord.data?.wallet_id
-      }
+      success: true, session: result.data.session,
+      user: { id: result.data.user.id, email: result.data.user.email, full_name: userRecord.data?.full_name || result.data.user.user_metadata?.full_name, wallet_address: userRecord.data?.wallet_address, wallet_id: userRecord.data?.wallet_id }
     });
 
-  // ── Wallet ────────────────────────────────────────────────────────────────
-} else if (path === "/api/price" && req.method === "GET") {
-    const symbol = urlObj.searchParams.get("symbol") || "CRCL";
-    return new Promise((resolve) => {
-      https.get("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=" + symbol + "&apikey=" + process.env.ALPHA_VANTAGE_KEY, (r) => {
-        let d = "";
-        r.on("data", c => d += c);
-        r.on("end", () => {
-          try {
-            const parsed = JSON.parse(d);
-            const quote = parsed["Global Quote"] || {};
-            resolve(json(res, {
-              symbol: symbol,
-              price: parseFloat(quote["05. price"] || 0),
-              change: quote["09. change"] || "0",
-              change_percent: quote["10. change percent"] || "0%",
-              previous_close: parseFloat(quote["08. previous close"] || 0)
-            }));
-          } catch(e) {
-            resolve(json(res, { symbol, price: 0, change: "0", change_percent: "0%" }));
-          }
+  } else if (path === "/api/auth/google" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: body.redirect_url || "https://trada-phi.vercel.app/portfolio" } });
+    if (result.error) return json(res, { error: result.error.message }, 400);
+    return json(res, { url: result.data.url });
+
+  } else if (path === "/api/auth/session" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.getUser(body.access_token);
+    if (result.error) return json(res, { error: result.error.message }, 401);
+    const userId = result.data.user.id;
+    const email = result.data.user.email;
+    const full_name = result.data.user.user_metadata?.full_name || result.data.user.user_metadata?.name || email;
+    let userRecord = await supabase.from("users").select("*").eq("id", userId).single();
+    if (!userRecord.data) {
+      let walletAddress = null, walletId = null;
+      try {
+        const walletResult = await circlePost("/v1/w3s/developer/wallets", {
+          idempotencyKey: crypto.randomUUID(), blockchains: ["ETH-SEPOLIA"], count: 1,
+          walletSetId: WALLET_SET_ID, entitySecretCiphertext: generateCiphertext()
         });
-      }).on("error", () => resolve(json(res, { symbol, price: 0 })));
-    });
+        walletAddress = walletResult.data?.wallets?.[0]?.address || null;
+        walletId = walletResult.data?.wallets?.[0]?.id || null;
+      } catch(err) { console.error("Wallet creation failed:", err.message); }
+      await supabase.from("users").insert({ id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId });
+      return json(res, { user: { id: userId, email, full_name, wallet_address: walletAddress, wallet_id: walletId } });
+    }
+    return json(res, { user: { id: userId, email, full_name: userRecord.data.full_name || full_name, wallet_address: userRecord.data.wallet_address, wallet_id: userRecord.data.wallet_id } });
+
+  // ── Wallet (public read) ──────────────────────────────────────────────────
 
   } else if (path === "/api/balance" && req.method === "GET") {
     const wallet_id = urlObj.searchParams.get("wallet_id") || DEFAULT_WALLET_ID;
@@ -302,205 +256,219 @@ async function handleRequest(path, req, res, urlObj) {
     const data = await circleGet("/v1/w3s/wallets/" + wallet_id + "/transactions?pageSize=10");
     return json(res, data.data || {});
 
-  } else if (path === "/api/send" && req.method === "POST") {
-    const body = await readBody(req);
-    const wallet_id = body.wallet_id || DEFAULT_WALLET_ID;
+  // ── Send (auth required) ──────────────────────────────────────────────────
 
+  } else if (path === "/api/send" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
+    const body = await readBody(req);
     const result = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(),
-      walletId: wallet_id,
-      entitySecretCiphertext: generateCiphertext(),
-      amounts: [body.amount],
-      destinationAddress: body.recipient,
-      tokenId: TOKEN_ID,
-      feeLevel: "MEDIUM"
+      idempotencyKey: crypto.randomUUID(), walletId: body.wallet_id || DEFAULT_WALLET_ID,
+      entitySecretCiphertext: generateCiphertext(), amounts: [body.amount],
+      destinationAddress: body.recipient, tokenId: TOKEN_ID, feeLevel: "MEDIUM"
     });
     return json(res, result.data || result);
 
-  // ── Invest ────────────────────────────────────────────────────────────────
-  } else if (path === "/api/sell" && req.method === "POST") {
-    const body = await readBody(req);
-    const { user_id, investment_id, company_name, amount_usdc, wallet_id, wallet_address } = body;
-
-    if (!user_id || !amount_usdc || !wallet_address) {
-      return json(res, { error: "Missing required fields" }, 400);
-    }
-
-    // Get original investment
-    const invResult = await supabase.from("investments").select("*").eq("id", investment_id).single();
-    if (invResult.error) return json(res, { error: "Investment not found" }, 404);
-
-    const originalAmount = parseFloat(invResult.data.amount_usdc);
-    const sellAmount = parseFloat(amount_usdc);
-    const remaining = originalAmount - sellAmount;
-
-    // Transfer USDC from master wallet back to user wallet
-    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(),
-      walletId: DEFAULT_WALLET_ID,
-      entitySecretCiphertext: generateCiphertext(),
-      amounts: [sellAmount.toString()],
-      destinationAddress: wallet_address,
-      tokenId: TOKEN_ID,
-      feeLevel: "MEDIUM"
-    });
-
-    if (transfer.code && transfer.code !== 200) {
-      return json(res, { error: transfer.message || "Transfer failed" }, 400);
-    }
-
-    const txId = transfer.data?.id || crypto.randomUUID();
-
-    if (remaining <= 0.01) {
-      // Full sell — mark as sold
-      await supabase.from("investments").update({ status: "sold", tx_id: txId }).eq("id", investment_id);
-    } else {
-      // Partial sell — update remaining amount
-      const newShares = parseFloat(invResult.data.shares) * (remaining / originalAmount);
-      await supabase.from("investments").update({
-        amount_usdc: remaining,
-        shares: newShares,
-        tx_id: txId
-      }).eq("id", investment_id);
-    }
-
-    return json(res, { success: true, tx_id: txId, remaining: remaining });
-
-    // Update investment status to sold
-    await supabase.from("investments")
-      .update({ status: "sold", tx_id: txId })
-      .eq("id", investment_id)
-      .eq("user_id", user_id);
-
-    return json(res, { success: true, tx_id: txId });
+  // ── Invest (auth required) ────────────────────────────────────────────────
 
   } else if (path === "/api/invest" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
-    const { user_id, wallet_id, company_name, company_icon, amount_usdc, shares, sector } = body;
-
+    const { user_id, wallet_id, company_name, company_icon, amount_usdc, shares } = body;
     if (!user_id || !amount_usdc) return json(res, { error: "Missing required fields" }, 400);
-
-    const sourceWalletId = wallet_id || DEFAULT_WALLET_ID;
-
-    // Transfer USDC via Circle API to master wallet
+    if (authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
+    if (parseFloat(amount_usdc) < 1) return json(res, { error: "Minimum investment is $1" }, 400);
     const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
-      idempotencyKey: crypto.randomUUID(),
-      walletId: sourceWalletId,
-      entitySecretCiphertext: generateCiphertext(),
-      amounts: [amount_usdc.toString()],
-      destinationAddress: "0xc06ff0029c313762060b1d461b3ea9aec1f87d4f",
-      tokenId: TOKEN_ID,
-      feeLevel: "MEDIUM"
+      idempotencyKey: crypto.randomUUID(), walletId: wallet_id || DEFAULT_WALLET_ID,
+      entitySecretCiphertext: generateCiphertext(), amounts: [amount_usdc.toString()],
+      destinationAddress: "0xc06ff0029c313762060b1d461b3ea9aec1f87d4f", tokenId: TOKEN_ID, feeLevel: "MEDIUM"
     });
-
-    if (transfer.code && transfer.code !== 200) {
-      return json(res, { error: transfer.message || "Transfer failed" }, 400);
-    }
-
+    if (transfer.code && transfer.code !== 200) return json(res, { error: transfer.message || "Transfer failed" }, 400);
     const txId = transfer.data?.id || crypto.randomUUID();
-
-    // Save investment to DB
-    await supabase.from("investments").insert({
-      user_id,
-      company_name,
-      company_icon,
-      amount_usdc: parseFloat(amount_usdc),
-      shares: parseFloat(shares),
-      tx_id: txId,
-      status: "confirmed"
-    });
-
-    return json(res, {
-      success: true,
-      tx_id: txId,
-      state: transfer.data?.state || "INITIATED"
-    });
+    await supabase.from("investments").insert({ user_id, company_name, company_icon, amount_usdc: parseFloat(amount_usdc), shares: parseFloat(shares), tx_id: txId, status: "confirmed" });
+    return json(res, { success: true, tx_id: txId, state: transfer.data?.state || "INITIATED" });
 
   } else if (path === "/api/invest/save" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
-    const result = await supabase.from("investments").insert({
-      user_id: body.user_id,
-      company_name: body.company_name,
-      company_icon: body.company_icon,
-      amount_usdc: parseFloat(body.amount_usdc),
-      shares: parseFloat(body.shares),
-      tx_id: body.tx_id,
-      status: "confirmed"
-    });
+    if (authUser.id !== body.user_id) return json(res, { error: "Forbidden" }, 403);
+    const result = await supabase.from("investments").insert({ user_id: body.user_id, company_name: body.company_name, company_icon: body.company_icon, amount_usdc: parseFloat(body.amount_usdc), shares: parseFloat(body.shares), tx_id: body.tx_id, status: "confirmed" });
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
-  // ── Portfolio ─────────────────────────────────────────────────────────────
+  // ── Sell (auth required) ──────────────────────────────────────────────────
+
+  } else if (path === "/api/sell" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
+    const body = await readBody(req);
+    const { user_id, investment_id, amount_usdc, wallet_address, shares, symbol } = body;
+    if (!user_id || !amount_usdc || !wallet_address) return json(res, { error: "Missing required fields" }, 400);
+    if (authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
+    const invResult = await supabase.from("investments").select("*").eq("id", investment_id).eq("user_id", user_id).single();
+    if (invResult.error) return json(res, { error: "Investment not found" }, 404);
+    const originalAmount = parseFloat(invResult.data.amount_usdc);
+    const sellAmount = parseFloat(amount_usdc);
+    const remaining = originalAmount - sellAmount;
+    let actualPayout = sellAmount;
+    if (symbol && shares) {
+      try {
+        const cached = priceCache[symbol];
+        const price = (cached && (Date.now() - cached.ts) < PRICE_TTL) ? cached.price : (await fetchSinglePrice(symbol))?.price;
+        if (price > 0) actualPayout = parseFloat(shares) * price;
+      } catch(e) { console.error("Price fetch error:", e.message); }
+    }
+    const transfer = await circlePost("/v1/w3s/developer/transactions/transfer", {
+      idempotencyKey: crypto.randomUUID(), walletId: DEFAULT_WALLET_ID,
+      entitySecretCiphertext: generateCiphertext(), amounts: [actualPayout.toFixed(2)],
+      destinationAddress: wallet_address, tokenId: TOKEN_ID, feeLevel: "MEDIUM"
+    });
+    if (transfer.code && transfer.code !== 200) return json(res, { error: transfer.message || "Transfer failed" }, 400);
+    const txId = transfer.data?.id || crypto.randomUUID();
+    if (remaining <= 0.01) {
+      await supabase.from("investments").update({ status: "sold", tx_id: txId }).eq("id", investment_id);
+    } else {
+      const newShares = parseFloat(invResult.data.shares) * (remaining / originalAmount);
+      await supabase.from("investments").update({ amount_usdc: remaining, shares: newShares, tx_id: txId }).eq("id", investment_id);
+    }
+    return json(res, { success: true, tx_id: txId, payout: actualPayout, remaining });
+
+  // ── Portfolio (auth required) ─────────────────────────────────────────────
 
   } else if (path === "/api/portfolio" && req.method === "GET") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const user_id = urlObj.searchParams.get("user_id");
-    if (!user_id) return json(res, { error: "user_id required" }, 400);
+    if (!user_id || authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
     const result = await supabase.from("investments").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
     if (result.error) return json(res, { error: result.error.message }, 500);
-    const total = result.data.reduce((sum, inv) => sum + parseFloat(inv.amount_usdc), 0);
+    const total = result.data.filter(i => i.status === "confirmed").reduce((sum, inv) => sum + parseFloat(inv.amount_usdc), 0);
     return json(res, { investments: result.data, total_invested: total.toFixed(2) });
 
-  // ── Watchlist ─────────────────────────────────────────────────────────────
+  // ── Watchlist (auth required) ─────────────────────────────────────────────
 
   } else if (path === "/api/watchlist" && req.method === "GET") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const user_id = urlObj.searchParams.get("user_id");
-    if (!user_id) return json(res, { error: "user_id required" }, 400);
+    if (!user_id || authUser.id !== user_id) return json(res, { error: "Forbidden" }, 403);
     const result = await supabase.from("watchlist").select("*").eq("user_id", user_id).order("created_at", { ascending: false });
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { watchlist: result.data });
 
   } else if (path === "/api/watchlist/add" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
-    const result = await supabase.from("watchlist").upsert({
-      user_id: body.user_id,
-      company_id: body.company_id,
-      company_name: body.company_name,
-      company_icon: body.company_icon,
-      company_sector: body.company_sector
-    }, { onConflict: "user_id,company_id" });
+    if (authUser.id !== body.user_id) return json(res, { error: "Forbidden" }, 403);
+    const result = await supabase.from("watchlist").upsert({ user_id: body.user_id, company_id: body.company_id, company_name: body.company_name, company_icon: body.company_icon, company_sector: body.company_sector }, { onConflict: "user_id,company_id" });
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
   } else if (path === "/api/watchlist/remove" && req.method === "POST") {
+    const authUser = await verifyToken(req);
+    if (!authUser) return json(res, { error: "Unauthorized" }, 401);
     const body = await readBody(req);
+    if (authUser.id !== body.user_id) return json(res, { error: "Forbidden" }, 403);
     const result = await supabase.from("watchlist").delete().eq("user_id", body.user_id).eq("company_id", body.company_id);
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
-  // ── IPOs ──────────────────────────────────────────────────────────────────
+  // ── Prices (public, cached) ───────────────────────────────────────────────
+
+  } else if (path === "/api/prices" && req.method === "GET") {
+    const symbols = (urlObj.searchParams.get("symbols") || "CRCL,JMIA,PYPL,COIN,HOOD,MSFT,AAPL,TSLA,NVDA,META,GOOGL,AMZN").split(",");
+    const now = Date.now();
+    const stale = symbols.filter(s => !priceCache[s] || (now - priceCache[s].ts) >= PRICE_TTL);
+    for (const symbol of stale.slice(0, 5)) {
+      try {
+        const data = await fetchSinglePrice(symbol);
+        if (data) priceCache[symbol] = { ...data, ts: now };
+      } catch(e) { console.error("Price error " + symbol, e.message); }
+      if (stale.indexOf(symbol) < stale.length - 1) await new Promise(r => setTimeout(r, 300));
+    }
+    const result = {};
+    symbols.forEach(s => { if (priceCache[s]) result[s] = priceCache[s]; });
+    return json(res, { prices: result, timestamp: now });
+
+  } else if (path === "/api/price" && req.method === "GET") {
+    const symbol = urlObj.searchParams.get("symbol") || "CRCL";
+    const now = Date.now();
+    if (priceCache[symbol] && (now - priceCache[symbol].ts) < PRICE_TTL) return json(res, priceCache[symbol]);
+    const data = await fetchSinglePrice(symbol);
+    if (data) { priceCache[symbol] = { ...data, ts: now }; return json(res, data); }
+    return json(res, { symbol, price: 0, change: "0", change_percent: "0%" });
+
+  } else if (path === "/api/history" && req.method === "GET") {
+    const symbol = urlObj.searchParams.get("symbol") || "CRCL";
+    const now = Date.now();
+    if (historyCache[symbol] && (now - historyCache[symbol].ts) < HISTORY_TTL) {
+      return json(res, { symbol, prices: historyCache[symbol].data, cached: true });
+    }
+    const parsed = await avGet({ function: "TIME_SERIES_DAILY", symbol, outputsize: "compact" });
+    const series = parsed["Time Series (Daily)"] || {};
+    const dates = Object.keys(series).sort();
+    const prices = {
+      "1D": dates.slice(-2).map(d => parseFloat(series[d]["4. close"])),
+      "1M": dates.slice(-22).map(d => parseFloat(series[d]["4. close"])),
+      "6M": dates.slice(-126).map(d => parseFloat(series[d]["4. close"])),
+      "12M": dates.slice(-252).map(d => parseFloat(series[d]["4. close"])),
+      dates: { "1D": dates.slice(-2), "1M": dates.slice(-22), "6M": dates.slice(-126), "12M": dates.slice(-252) }
+    };
+    historyCache[symbol] = { data: prices, ts: now };
+    return json(res, { symbol, prices });
+
+  } else if (path === "/api/sentiment" && req.method === "GET") {
+    const now = Date.now();
+    if (sentimentCache.data && (now - sentimentCache.ts) < SENT_TTL) return json(res, sentimentCache.data);
+    return new Promise((resolve) => {
+      https.get({ hostname: "api.alternative.me", path: "/fng/?limit=1" }, (r) => {
+        let d = "";
+        r.on("data", c => d += c);
+        r.on("end", () => {
+          try {
+            const parsed = JSON.parse(d);
+            const data = { value: parseInt(parsed.data[0].value), label: parsed.data[0].value_classification };
+            sentimentCache = { data, ts: Date.now() };
+            resolve(json(res, data));
+          } catch(e) { resolve(json(res, sentimentCache.data || { value: 65, label: "Greed" })); }
+        });
+      }).on("error", () => resolve(json(res, sentimentCache.data || { value: 65, label: "Greed" })));
+    });
+
+  // ── IPOs (public, cached) ─────────────────────────────────────────────────
 
   } else if (path === "/api/ipos" && req.method === "GET") {
+    const now = Date.now();
+    if (ipoCache.data && (now - ipoCache.ts) < IPO_TTL) return json(res, { ipos: ipoCache.data, cached: true });
     return new Promise((resolve) => {
-      https.get("https://www.alphavantage.co/query?function=IPO_CALENDAR&apikey=" + process.env.ALPHA_VANTAGE_KEY, (r) => {
+      https.get({ hostname: "www.alphavantage.co", path: "/query?function=IPO_CALENDAR&apikey=" + process.env.ALPHA_VANTAGE_KEY }, (r) => {
         let d = "";
         r.on("data", c => d += c);
         r.on("end", () => {
           const lines = d.trim().split("\n");
           const headers = lines[0].split(",");
-          const rows = lines.slice(1).filter(line => line.trim()).map(line => {
+          const rows = lines.slice(1).filter(l => l.trim()).map(line => {
             const values = line.split(",");
             const obj = {};
             headers.forEach((h, i) => { obj[h.trim()] = values[i] ? values[i].trim() : ""; });
             return obj;
           });
+          ipoCache = { data: rows, ts: Date.now() };
           resolve(json(res, { ipos: rows }));
         });
-      }).on("error", () => resolve(json(res, { ipos: [] })));
+      }).on("error", () => resolve(json(res, { ipos: ipoCache.data || [] })));
     });
 
   // ── Static files ──────────────────────────────────────────────────────────
 
-  } else if (path === "/auth" && req.method === "GET") {
-    serveFile(res, "auth.html", "text/html");
-  } else if (path === "/invest" && req.method === "GET") {
-    serveFile(res, "invest.html", "text/html");
-  } else if (path === "/portfolio" && req.method === "GET") {
-    serveFile(res, "portfolio.html", "text/html");
-  } else if (path === "/" && req.method === "GET") {
-    serveFile(res, "index.html", "text/html");
-  } else {
-    json(res, { error: "Not found" }, 404);
-  }
+  } else if (path === "/auth" && req.method === "GET") { serveFile(res, "auth.html", "text/html");
+  } else if (path === "/invest" && req.method === "GET") { serveFile(res, "invest.html", "text/html");
+  } else if (path === "/portfolio" && req.method === "GET") { serveFile(res, "portfolio.html", "text/html");
+  } else if (path === "/" && req.method === "GET") { serveFile(res, "index.html", "text/html");
+  } else { json(res, { error: "Not found" }, 404); }
 }
 
 const PORT = process.env.PORT || 3000;
