@@ -356,6 +356,108 @@ async function handleRequest(path, req, res, urlObj) {
     if (result.error) return json(res, { error: result.error.message }, 500);
     return json(res, { success: true });
 
+    } else if (path === "/api/market-analysis" && req.method === "GET") {
+    const now = Date.now();
+    const ANALYSIS_TTL = 24 * 60 * 60 * 1000; // 24 hours
+    
+    // Check cache
+    if (global.marketAnalysisCache && (now - global.marketAnalysisCache.ts) < ANALYSIS_TTL) {
+      return json(res, global.marketAnalysisCache.data);
+    }
+
+    // Fetch current market data
+    const symbols = ['CRCL', 'AAPL', 'TSLA', 'NVDA', 'META'];
+    const pricePromises = symbols.map(s => fetchSinglePrice(s));
+    const prices = await Promise.all(pricePromises);
+    
+    // Fetch sentiment
+    const sentimentRes = await new Promise(resolve => {
+      https.get({ hostname: "api.alternative.me", path: "/fng/?limit=1" }, r => {
+        let d = ""; r.on("data", c => d += c); 
+        r.on("end", () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
+      }).on("error", () => resolve(null));
+    });
+    const sentiment = sentimentRes?.data?.[0] || { value: 50, value_classification: "Neutral" };
+
+    // Prepare data for Claude
+    const marketData = {
+      date: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+      sentiment: { score: sentiment.value, label: sentiment.value_classification },
+      stocks: prices.filter(Boolean).map(p => ({ 
+        symbol: p.symbol, 
+        price: p.price, 
+        change: p.change_percent 
+      }))
+    };
+
+    // Call Claude API
+    try {
+      const claudeRes = await new Promise((resolve, reject) => {
+        const data = JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: `You are a financial analyst providing a daily market summary for African investors on Trada, a platform for investing in US stocks with USDC.
+
+Today is ${marketData.date}.
+
+Market data:
+- Fear & Greed Index: ${marketData.sentiment.score}/100 (${marketData.sentiment.label})
+- Circle Internet (CRCL): $${marketData.stocks[0]?.price} (${marketData.stocks[0]?.change})
+- Apple (AAPL): $${marketData.stocks[1]?.price} (${marketData.stocks[1]?.change})
+- Tesla (TSLA): $${marketData.stocks[2]?.price} (${marketData.stocks[2]?.change})
+- Nvidia (NVDA): $${marketData.stocks[3]?.price} (${marketData.stocks[3]?.change})
+- Meta (META): $${marketData.stocks[4]?.price} (${marketData.stocks[4]?.change})
+
+Write a 2-3 paragraph daily market analysis. Include:
+1. Overall market sentiment and what's driving it
+2. Notable movers and why they matter for African investors
+3. Brief outlook for the week
+
+Tone: Professional but accessible. Write for Nigerian, Kenyan, and South African investors. Keep it concise (200-250 words max).`
+          }]
+        });
+
+        const req = https.request({
+          hostname: "api.anthropic.com",
+          path: "/v1/messages",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": process.env.ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "Content-Length": Buffer.byteLength(data)
+          }
+        }, res => {
+          let response = "";
+          res.on("data", c => response += c);
+          res.on("end", () => {
+            try { resolve(JSON.parse(response)); } 
+            catch(e) { reject(e); }
+          });
+        });
+        req.on("error", reject);
+        req.write(data);
+        req.end();
+      });
+
+      const analysis = claudeRes.content[0].text;
+      const result = { analysis, marketData, timestamp: now };
+      
+      // Cache for 24 hours
+      global.marketAnalysisCache = { data: result, ts: now };
+      
+      return json(res, result);
+    } catch(e) {
+      console.error("Claude API error:", e);
+      return json(res, { 
+        analysis: "Market analysis unavailable. Check back later.", 
+        marketData, 
+        timestamp: now 
+      });
+    }
+
   // ── Prices ────────────────────────────────────────────────────────────────
   } else if (path === "/api/prices" && req.method === "GET") {
     const symbols = (urlObj.searchParams.get("symbols") || "CRCL,JMIA,PYPL,COIN,HOOD,MSFT,AAPL,TSLA,NVDA,META,GOOGL,AMZN").split(",");
