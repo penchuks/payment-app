@@ -366,9 +366,17 @@ async function handleRequest(path, req, res, urlObj) {
     }
 
     // Fetch current market data
-    const symbols = ['CRCL', 'AAPL', 'TSLA', 'NVDA', 'META'];
-    const pricePromises = symbols.map(s => fetchSinglePrice(s));
-    const prices = await Promise.all(pricePromises);
+   const symbols = ['CRCL', 'AAPL', 'TSLA', 'NVDA', 'META'];
+const prices = [];
+for (const symbol of symbols) {
+  try {
+    const price = await fetchSinglePrice(symbol);
+    if (price) prices.push(price);
+    if (symbols.indexOf(symbol) < symbols.length - 1) {
+      await new Promise(r => setTimeout(r, 15000)); // 15 sec between calls
+    }
+  } catch(e) { console.error('Price fetch error:', symbol, e.message); }
+}
     
     // Fetch sentiment
     const sentimentRes = await new Promise(resolve => {
