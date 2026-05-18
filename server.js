@@ -365,17 +365,21 @@ async function handleRequest(path, req, res, urlObj) {
       return json(res, global.marketAnalysisCache.data);
     }
 
-    // Fetch current market data
-   const symbols = ['CRCL', 'AAPL', 'TSLA', 'NVDA', 'META'];
+   // Use already-cached prices
+const symbols = ['CRCL', 'AAPL', 'TSLA', 'NVDA', 'META'];
 const prices = [];
 for (const symbol of symbols) {
+  if (priceCache[symbol]) {
+    prices.push(priceCache[symbol]);
+  }
+}
+
+// If cache is empty, fetch just CRCL quickly
+if (prices.length === 0) {
   try {
-    const price = await fetchSinglePrice(symbol);
-    if (price) prices.push(price);
-    if (symbols.indexOf(symbol) < symbols.length - 1) {
-      await new Promise(r => setTimeout(r, 15000)); // 15 sec between calls
-    }
-  } catch(e) { console.error('Price fetch error:', symbol, e.message); }
+    const crclPrice = await fetchSinglePrice('CRCL');
+    if (crclPrice) prices.push(crclPrice);
+  } catch(e) {}
 }
     
     // Fetch sentiment
