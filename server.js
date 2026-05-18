@@ -12,7 +12,7 @@ const PortfolioAnalytics = require('./lib/portfolio-analytics');
 // Environment variables
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CIRCLE_API_KEY = process.env.CIRCLE_API_KEY;
 const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY;
 const DEFAULT_WALLET_ID = process.env.DEFAULT_WALLET_ID;
