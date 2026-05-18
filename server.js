@@ -1,4 +1,4 @@
-// server.js - Updated with business logic modules
+// server.js - Complete with auth + business logic
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
@@ -12,24 +12,61 @@ const PortfolioAnalytics = require('./lib/portfolio-analytics');
 // Environment variables
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CIRCLE_API_KEY = process.env.CIRCLE_API_KEY;
 const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY;
 const DEFAULT_WALLET_ID = process.env.DEFAULT_WALLET_ID;
 const ENTITY_SECRET = process.env.ENTITY_SECRET;
 const TOKEN_ID = process.env.TOKEN_ID || '36b1737e-549e-5406-84af-6d7c1a57c0ab';
+const WALLET_SET_ID = "b57b1e16-157d-591a-a2e0-afe23e2d3f43";
 
 // Initialize Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // Cache objects
 let priceCache = {};
-let historyCache = {};
 let sentimentCache = { data: null, ts: 0 };
 
-// Circle API wrapper
+// Circle API helper
+function circlePost(path, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = https.request({
+      hostname: "api.circle.com", 
+      path, 
+      method: "POST",
+      headers: { 
+        "Authorization": "Bearer " + CIRCLE_API_KEY, 
+        "Content-Type": "application/json", 
+        "Content-Length": Buffer.byteLength(data) 
+      }
+    }, res => { 
+      let r = ""; 
+      res.on("data", c => r += c); 
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(r));
+        } catch(e) {
+          resolve({ error: r });
+        }
+      }); 
+    });
+    req.on("error", reject); 
+    req.write(data); 
+    req.end();
+  });
+}
+
+function generateCiphertext() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Circle API wrapper for business logic modules
 const CircleAPI = {
   async request(method, endpoint, body = null) {
+    if (method === 'POST') {
+      return await circlePost(endpoint, body);
+    }
     return new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.circle.com',
@@ -46,8 +83,7 @@ const CircleAPI = {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           try {
-            const parsed = JSON.parse(data);
-            resolve(parsed);
+            resolve(JSON.parse(data));
           } catch(e) {
             resolve({ code: res.statusCode, message: data });
           }
@@ -61,27 +97,21 @@ const CircleAPI = {
   },
 
   async transfer({ fromWalletId, toWalletId, amount, entitySecret, idempotencyKey }) {
-    const result = await this.request('POST', '/v1/w3s/developer/transactions/transfer', {
+    const result = await circlePost('/v1/w3s/developer/transactions/transfer', {
       idempotencyKey: idempotencyKey,
       walletId: fromWalletId,
-      entitySecretCiphertext: entitySecret,
-      amounts: [amount],
+      entitySecretCiphertext: entitySecret || generateCiphertext(),
+      amounts: [amount.toString()],
       destinationAddress: toWalletId,
       tokenId: TOKEN_ID,
       feeLevel: 'MEDIUM'
     });
 
     if (result.data && result.data.id) {
-      return {
-        success: true,
-        transactionId: result.data.id
-      };
+      return { success: true, transactionId: result.data.id };
     }
 
-    return {
-      success: false,
-      error: result.message || 'Transfer failed'
-    };
+    return { success: false, error: result.message || 'Transfer failed' };
   },
 
   async getBalance(walletId) {
@@ -141,7 +171,7 @@ const PriceAPI = {
     const result = {};
     for (const symbol of symbols) {
       result[symbol] = await this.get(symbol);
-      await new Promise(r => setTimeout(r, 200)); // Rate limit
+      await new Promise(r => setTimeout(r, 200));
     }
     return result;
   }
@@ -177,10 +207,6 @@ async function readBody(req) {
   });
 }
 
-function generateCiphertext() {
-  return crypto.randomBytes(32).toString('hex');
-}
-
 // Main server
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
@@ -190,17 +216,207 @@ const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://${req.headers.host}`);
   const path = urlObj.pathname;
 
-  // ── Investment Endpoints ──────────────────────────────────────────
+  // ── Auth Endpoints ─────────────────────────────────────────────────
+
+  if (path === "/api/signup" && req.method === "POST") {
+    const body = await readBody(req);
+    const { email, password, full_name, username } = body;
+    
+    if (!email || !password || !full_name) {
+      return json(res, { error: "Email, password and full name required" }, 400);
+    }
+    
+    if (password.length < 8) {
+      return json(res, { error: "Password must be at least 8 characters" }, 400);
+    }
+    
+    const result = await supabase.auth.admin.createUser({ 
+      email, 
+      password, 
+      user_metadata: { full_name }, 
+      email_confirm: true 
+    });
+    
+    if (result.error) {
+      return json(res, { error: result.error.message }, 400);
+    }
+    
+    const userId = result.data.user.id;
+    let walletAddress = null, walletId = null;
+    
+    try {
+      const wr = await circlePost("/v1/w3s/developer/wallets", { 
+        idempotencyKey: crypto.randomUUID(), 
+        blockchains: ["ETH-SEPOLIA"], 
+        count: 1, 
+        walletSetId: WALLET_SET_ID, 
+        entitySecretCiphertext: generateCiphertext() 
+      });
+      walletAddress = wr.data?.wallets?.[0]?.address || null;
+      walletId = wr.data?.wallets?.[0]?.id || null;
+    } catch(e) { 
+      console.error("Wallet error:", e.message); 
+    }
+    
+    await supabase.from("users").insert({ 
+      id: userId, 
+      email, 
+      full_name, 
+      username: username || null, 
+      wallet_address: walletAddress, 
+      wallet_id: walletId 
+    });
+    
+    return json(res, { 
+      success: true, 
+      user: { 
+        id: userId, 
+        email, 
+        full_name, 
+        username, 
+        wallet_address: walletAddress, 
+        wallet_id: walletId 
+      } 
+    });
+  }
+
+  if (path === "/api/login" && req.method === "POST") {
+    const body = await readBody(req);
+    const { email, password } = body;
+    
+    if (!email || !password) {
+      return json(res, { error: "Email and password required" }, 400);
+    }
+    
+    const result = await supabase.auth.signInWithPassword({ email, password });
+    
+    if (result.error) {
+      return json(res, { error: result.error.message }, 401);
+    }
+    
+    const ur = await supabase.from("users").select("wallet_address,wallet_id,full_name,username").eq("id", result.data.user.id).single();
+    
+    return json(res, { 
+      success: true, 
+      session: result.data.session, 
+      user: { 
+        id: result.data.user.id, 
+        email: result.data.user.email, 
+        full_name: ur.data?.full_name || result.data.user.user_metadata?.full_name, 
+        username: ur.data?.username, 
+        wallet_address: ur.data?.wallet_address, 
+        wallet_id: ur.data?.wallet_id 
+      } 
+    });
+  }
+
+  if (path === "/api/auth/google" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.signInWithOAuth({ 
+      provider: "google", 
+      options: { redirectTo: body.redirect_url || "https://trada-phi.vercel.app/portfolio" } 
+    });
+    
+    if (result.error) {
+      return json(res, { error: result.error.message }, 400);
+    }
+    
+    return json(res, { url: result.data.url });
+  }
+
+  if (path === "/api/auth/session" && req.method === "POST") {
+    const body = await readBody(req);
+    const result = await supabase.auth.getUser(body.access_token);
+    
+    if (result.error) {
+      return json(res, { error: result.error.message }, 401);
+    }
+    
+    const userId = result.data.user.id;
+    const email = result.data.user.email;
+    const full_name = result.data.user.user_metadata?.full_name || result.data.user.user_metadata?.name || email;
+    
+    let ur = await supabase.from("users").select("*").eq("id", userId).single();
+    
+    if (!ur.data) {
+      let walletAddress = null, walletId = null;
+      try {
+        const wr = await circlePost("/v1/w3s/developer/wallets", { 
+          idempotencyKey: crypto.randomUUID(), 
+          blockchains: ["ETH-SEPOLIA"], 
+          count: 1, 
+          walletSetId: WALLET_SET_ID, 
+          entitySecretCiphertext: generateCiphertext() 
+        });
+        walletAddress = wr.data?.wallets?.[0]?.address || null;
+        walletId = wr.data?.wallets?.[0]?.id || null;
+      } catch(e) {}
+      
+      await supabase.from("users").insert({ 
+        id: userId, 
+        email, 
+        full_name, 
+        wallet_address: walletAddress, 
+        wallet_id: walletId 
+      });
+      
+      return json(res, { 
+        user: { 
+          id: userId, 
+          email, 
+          full_name, 
+          wallet_address: walletAddress, 
+          wallet_id: walletId 
+        } 
+      });
+    }
+    
+    return json(res, { 
+      user: { 
+        id: userId, 
+        email, 
+        full_name: ur.data.full_name || full_name, 
+        username: ur.data.username, 
+        wallet_address: ur.data.wallet_address, 
+        wallet_id: ur.data.wallet_id 
+      } 
+    });
+  }
+
+  if (path === "/api/auth/refresh" && req.method === "POST") {
+    const body = await readBody(req);
+    const { refresh_token } = body;
+    
+    if (!refresh_token) {
+      return json(res, { error: "Refresh token required" }, 400);
+    }
+
+    try {
+      const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+      
+      if (error) {
+        return json(res, { error: error.message }, 401);
+      }
+
+      return json(res, { 
+        session: data.session,
+        user: data.user 
+      });
+    } catch(e) {
+      console.error('Token refresh error:', e);
+      return json(res, { error: 'Token refresh failed' }, 500);
+    }
+  }
+
+  // ── Investment Endpoints ───────────────────────────────────────────
 
   if (path === '/api/invest' && req.method === 'POST') {
     const body = await readBody(req);
     const { user_id, symbol, amount, company_name, company_icon, company_sector } = body;
 
     try {
-      // Get current price
       const currentPrice = await PriceAPI.get(symbol);
       
-      // Get user data
       const { data: user } = await supabase
         .from('users')
         .select('wallet_id')
@@ -211,7 +427,6 @@ const server = http.createServer(async (req, res) => {
         return json(res, { error: 'User not found' }, 404);
       }
 
-      // Execute investment
       const result = await investmentEngine.executeInvestment({
         userId: user_id,
         symbol: symbol,
@@ -256,7 +471,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── P2P / Gift Endpoints ──────────────────────────────────────────
+  // ── P2P / Gift Endpoints ───────────────────────────────────────────
 
   if (path === '/api/gift' && req.method === 'POST') {
     const body = await readBody(req);
@@ -289,7 +504,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── Portfolio Endpoints ───────────────────────────────────────────
+  // ── Portfolio Endpoints ────────────────────────────────────────────
 
   if (path === '/api/portfolio' && req.method === 'GET') {
     const userId = urlObj.searchParams.get('user_id');
@@ -327,7 +542,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── Price Endpoints (existing) ────────────────────────────────────
+  // ── Price Endpoints ────────────────────────────────────────────────
 
   if (path === '/api/prices' && req.method === 'GET') {
     const symbols = (urlObj.searchParams.get('symbols') || 'CRCL,JMIA').split(',');
@@ -341,33 +556,6 @@ const server = http.createServer(async (req, res) => {
     return json(res, price);
   }
 
-  // ── Auth Endpoints (existing - add token refresh) ─────────────────
-
-  if (path === '/api/auth/refresh' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { refresh_token } = body;
-    
-    if (!refresh_token) {
-      return json(res, { error: 'Refresh token required' }, 400);
-    }
-
-    try {
-      const { data, error } = await supabase.auth.refreshSession({ refresh_token });
-      
-      if (error) {
-        return json(res, { error: error.message }, 401);
-      }
-
-      return json(res, { 
-        session: data.session,
-        user: data.user 
-      });
-    } catch(e) {
-      console.error('Token refresh error:', e);
-      return json(res, { error: 'Token refresh failed' }, 500);
-    }
-  }
-
   // Default 404
   return json(res, { error: 'Not found' }, 404);
 });
@@ -378,4 +566,5 @@ server.listen(PORT, () => {
   console.log('   ✓ Investment Engine');
   console.log('   ✓ P2P Engine');
   console.log('   ✓ Portfolio Analytics');
+  console.log('✅ Auth endpoints ready: /api/signup, /api/login, /api/auth/*');
 });
