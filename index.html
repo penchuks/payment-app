@@ -185,5 +185,31 @@
 
     loadBalance();
   </script>
+  <script>
+// Update nav based on auth state
+(function() {
+  const user = JSON.parse(localStorage.getItem('trada_user') || 'null');
+  if (user) {
+    // User is logged in - update nav
+    const loginBtn = document.querySelector('a[href*="/auth"]');
+    const ctaBtn = document.querySelector('.nav-cta');
+    
+    if (loginBtn && loginBtn.textContent.includes('Log in')) {
+      loginBtn.textContent = 'Logout';
+      loginBtn.href = '#';
+      loginBtn.onclick = function(e) {
+        e.preventDefault();
+        localStorage.clear();
+        window.location.href = '/';
+      };
+    }
+    
+    if (ctaBtn && ctaBtn.textContent.includes('Start Investing')) {
+      ctaBtn.textContent = 'Portfolio →';
+      ctaBtn.href = '/portfolio';
+    }
+  }
+})();
+</script>
 </body>
 </html>

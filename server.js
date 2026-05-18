@@ -202,7 +202,31 @@ async function handleRequest(path, req, res, urlObj) {
     }
     return json(res, { user: { id: userId, email, full_name: ur.data.full_name || full_name, username: ur.data.username, wallet_address: ur.data.wallet_address, wallet_id: ur.data.wallet_id } });
 
-  // ── Lookup user ───────────────────────────────────────────────────────────
+    } else if (path === "/api/auth/refresh" && req.method === "POST") {
+    const body = await readBody(req);
+    const { refresh_token } = body;
+    
+    if (!refresh_token) {
+      return json(res, { error: "Refresh token required" }, 400);
+    }
+
+    try {
+      const result = await supabase.auth.refreshSession({ refresh_token });
+      
+      if (result.error) {
+        return json(res, { error: result.error.message }, 401);
+      }
+
+      return json(res, { 
+        session: result.data.session,
+        user: result.data.user 
+      });
+    } catch(e) {
+      console.error("Token refresh error:", e);
+      return json(res, { error: "Token refresh failed" }, 500);
+    }
+
+    // ── Lookup user ───────────────────────────────────────────────────────────
   } else if (path === "/api/lookup" && req.method === "GET") {
     const q = urlObj.searchParams.get("q");
     if (!q) return json(res, { error: "Query required" }, 400);
